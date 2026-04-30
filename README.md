@@ -71,3 +71,4 @@ Can using faq.json that in japanse and then reponse translate in english.
 ### 2. Chat 
 - click from chat button on chat list
 - using api that code with Fastify
+- Restore chat in LocalStorage
