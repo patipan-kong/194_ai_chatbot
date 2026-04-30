@@ -8,6 +8,7 @@ const WELCOME_MESSAGE = {
 
 const SESSION_KEY = '194964_session_id'
 const MESSAGES_KEY = '194964_messages'
+const MODEL_KEY = '194964_model'
 
 function loadMessages () {
   try {
@@ -19,9 +20,7 @@ function loadMessages () {
 }
 
 function saveMessages (messages) {
-  try {
-    localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages))
-  } catch {}
+  try { localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages)) } catch {}
 }
 
 function Avatar () {
@@ -37,14 +36,15 @@ function ChatBubble ({ message }) {
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
       {!isUser && <Avatar />}
-      <div
-        className={`max-w-[78%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap shadow-sm ${
-          isUser
-            ? 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white rounded-br-sm'
-            : 'bg-white text-gray-800 rounded-bl-sm border border-gray-100 shadow'
-        }`}
-      >
+      <div className={`max-w-[78%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap shadow-sm ${
+        isUser
+          ? 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white rounded-br-sm'
+          : 'bg-white text-gray-800 rounded-bl-sm border border-gray-100 shadow'
+      }`}>
         {message.text}
+        {message.model && !isUser && (
+          <span className='block mt-1.5 text-[10px] text-gray-400'>{message.model}</span>
+        )}
       </div>
     </div>
   )
@@ -57,14 +57,30 @@ function TypingIndicator () {
       <div className='bg-white border border-gray-100 rounded-2xl rounded-bl-sm px-4 py-3 shadow'>
         <div className='flex gap-1.5 items-center h-4'>
           {[0, 150, 300].map(delay => (
-            <span
-              key={delay}
-              className='w-2 h-2 bg-indigo-400 rounded-full animate-bounce'
-              style={{ animationDelay: `${delay}ms` }}
-            />
+            <span key={delay} className='w-2 h-2 bg-indigo-400 rounded-full animate-bounce' style={{ animationDelay: `${delay}ms` }} />
           ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+function ModelPicker ({ models, selected, onChange }) {
+  return (
+    <div className='flex gap-1.5 overflow-x-auto scrollbar-hide py-0.5'>
+      {models.map(m => (
+        <button
+          key={m.id}
+          onClick={() => onChange(m.id)}
+          className={`flex-shrink-0 text-xs px-3 py-1 rounded-full border transition-all ${
+            selected === m.id
+              ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+              : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
+          }`}
+        >
+          {m.label}
+        </button>
+      ))}
     </div>
   )
 }
@@ -74,18 +90,32 @@ export default function App () {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [models, setModels] = useState([])
+  const [selectedModel, setSelectedModel] = useState(
+    () => localStorage.getItem(MODEL_KEY) || 'llama-3.1-8b-instant'
+  )
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
-
   const sessionId = useRef(localStorage.getItem(SESSION_KEY) || undefined)
 
   useEffect(() => {
-    saveMessages(messages)
-  }, [messages])
+    const apiBase = import.meta.env.VITE_API_URL || ''
+    fetch(`${apiBase}/api/models`)
+      .then(r => r.json())
+      .then(data => setModels(data.models || []))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => { saveMessages(messages) }, [messages])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
+
+  function handleModelChange (id) {
+    setSelectedModel(id)
+    localStorage.setItem(MODEL_KEY, id)
+  }
 
   function clearChat () {
     localStorage.removeItem(MESSAGES_KEY)
@@ -101,8 +131,7 @@ export default function App () {
 
     setInput('')
     setError(null)
-    const userMsg = { id: Date.now(), role: 'user', text }
-    setMessages(prev => [...prev, userMsg])
+    setMessages(prev => [...prev, { id: Date.now(), role: 'user', text }])
     setLoading(true)
 
     try {
@@ -110,11 +139,10 @@ export default function App () {
       const res = await fetch(`${apiBase}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId: sessionId.current })
+        body: JSON.stringify({ message: text, model: selectedModel, sessionId: sessionId.current })
       })
 
       if (!res.ok) throw new Error(`Server error: ${res.status}`)
-
       const data = await res.json()
 
       if (data.sessionId) {
@@ -124,7 +152,7 @@ export default function App () {
 
       setMessages(prev => [
         ...prev,
-        { id: Date.now() + 1, role: 'assistant', text: data.reply }
+        { id: Date.now() + 1, role: 'assistant', text: data.reply, model: data.model }
       ])
     } catch {
       setError('メッセージの送信に失敗しました。もう一度お試しください。')
@@ -156,7 +184,6 @@ export default function App () {
           onClick={clearChat}
           className='text-white/70 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/10'
           title='チャットをリセット'
-          aria-label='チャットをリセット'
         >
           <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
             <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16' />
@@ -164,8 +191,16 @@ export default function App () {
         </button>
       </header>
 
+      {/* Model picker */}
+      {models.length > 0 && (
+        <div className='px-4 pt-3 pb-2 bg-white border-b border-gray-100 flex-shrink-0'>
+          <p className='text-[11px] text-gray-400 mb-1.5'>AI モデル選択</p>
+          <ModelPicker models={models} selected={selectedModel} onChange={handleModelChange} />
+        </div>
+      )}
+
       {/* Date divider */}
-      <div className='flex items-center gap-2 px-4 pt-4 pb-1'>
+      <div className='flex items-center gap-2 px-4 pt-3 pb-1'>
         <div className='flex-1 h-px bg-gray-200' />
         <span className='text-xs text-gray-400 whitespace-nowrap'>
           {new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })}
@@ -175,9 +210,7 @@ export default function App () {
 
       {/* Messages */}
       <main className='flex-1 overflow-y-auto px-4 pt-2 pb-2 scrollbar-hide'>
-        {messages.map(msg => (
-          <ChatBubble key={msg.id} message={msg} />
-        ))}
+        {messages.map(msg => <ChatBubble key={msg.id} message={msg} />)}
         {loading && <TypingIndicator />}
         {error && (
           <div className='mx-2 mb-3 flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5'>
@@ -220,3 +253,4 @@ export default function App () {
     </div>
   )
 }
+

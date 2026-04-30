@@ -1,6 +1,6 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
-import { ai } from '@platformatic/fastify-ai'
+import OpenAI from 'openai'
 import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
@@ -11,6 +11,37 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const faq = JSON.parse(
   readFileSync(join(__dirname, '../faq.json'), 'utf-8')
 )
+
+// All supported models and their provider routing
+const MODELS = [
+  { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash',    provider: 'gemini', temperature: 0.7 },
+  { id: 'gpt-5-mini',            label: 'GPT-5 Mini',          provider: 'openai', temperature: 1.0 },
+  { id: 'gpt-5-nano',            label: 'GPT-5 Nano',          provider: 'openai', temperature: 1.0 },
+  { id: 'llama-3.1-8b-instant',  label: 'Llama 3.1 8B',        provider: 'groq', temperature: 0.7 }
+]
+const DEFAULT_MODEL = 'llama-3.1-8b-instant'
+
+// Lazy-initialised OpenAI-compatible clients
+function getClient (provider) {
+  switch (provider) {
+    case 'gemini':
+      return new OpenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/'
+      })
+    case 'openai':
+      return new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY
+      })
+    case 'groq':
+      return new OpenAI({
+        apiKey: process.env.GROQ_API_KEY,
+        baseURL: 'https://api.groq.com/openai/v1'
+      })
+    default:
+      throw new Error(`Unknown provider: ${provider}`)
+  }
+}
 
 function buildSystemPrompt () {
   const faqText = faq.faq
@@ -45,11 +76,7 @@ await app.register(cors, {
 })
 
 app.setNotFoundHandler((request, reply) => {
-  reply.code(404).send({
-    error: 'Not Found',
-    message: `Route ${request.method}:${request.url} not found`,
-    statusCode: 404
-  })
+  reply.code(404).send({ error: 'Not Found', statusCode: 404 })
 })
 
 app.setErrorHandler((err, request, reply) => {
@@ -60,46 +87,42 @@ app.setErrorHandler((err, request, reply) => {
   })
 })
 
-await app.register(ai, {
-  providers: {
-    gemini: { apiKey: process.env.GEMINI_API_KEY }
-  },
-  models: [
-    { provider: 'gemini', model: 'gemini-2.5-flash' }
-  ],
-  storage: { type: 'memory' }
-})
+// Return available models to the frontend
+app.get('/api/models', async () => ({ models: MODELS, default: DEFAULT_MODEL }))
 
 app.post('/api/chat', async (request, reply) => {
-  const { message, sessionId } = request.body
+  const { message, model: modelId = DEFAULT_MODEL } = request.body
 
   if (!message || typeof message !== 'string') {
     return reply.code(400).send({ error: 'message is required' })
   }
 
-  if (!process.env.GEMINI_API_KEY) {
-    return reply.code(500).send({ error: 'GEMINI_API_KEY is not set in .env' })
+  const modelConfig = MODELS.find(m => m.id === modelId)
+  if (!modelConfig) {
+    return reply.code(400).send({ error: `Unknown model: ${modelId}` })
+  }
+
+  const envKeys = { gemini: 'GEMINI_API_KEY', openai: 'OPENAI_API_KEY', groq: 'GROQ_API_KEY' }
+  const envKey = envKeys[modelConfig.provider]
+  if (!process.env[envKey]) {
+    return reply.code(500).send({ error: `${envKey} is not set in .env` })
   }
 
   try {
-    const response = await app.ai.request({
-      request,
-      prompt: message,
-      context: buildSystemPrompt(),
-      temperature: 0.7,
-      stream: false
-    }, reply)
+    const client = getClient(modelConfig.provider)
+    const completion = await client.chat.completions.create({
+      model: modelId,
+      temperature: modelConfig.temperature,
+      messages: [
+        { role: 'system', content: buildSystemPrompt() },
+        { role: 'user', content: message }
+      ]
+    })
 
-    return {
-      reply: response.text,
-      sessionId: response.sessionId
-    }
+    return { reply: completion.choices[0].message.content, model: modelId }
   } catch (err) {
     app.log.error({ err }, 'AI request failed')
-    return reply.code(500).send({
-      error: 'AI service error',
-      detail: err.message
-    })
+    return reply.code(500).send({ error: 'AI service error', detail: err.message })
   }
 })
 
