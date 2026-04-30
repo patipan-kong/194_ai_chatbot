@@ -37,7 +37,7 @@ Can using faq.json that in japanse and then reponse translate in english.
 - **Responsive design**: Mobile-optimized with prevent zoom on double-tap
 - **Session management**: Optional localStorage for data persistence
 - **Error handling**: Graceful fallbacks and user-friendly error messages
-- **Chat**: Using Gemini 1.5 Flash model for chat response
+- **Chat**: Using Gemini 2.5 Flash model for chat response
 
 ---
 ## 🌟 Technology Stack
@@ -52,7 +52,7 @@ Can using faq.json that in japanse and then reponse translate in english.
 
 ### API
 - **Fastify** : 
-- **Chat API*** : Using @platformatic/fastify-ai connect to Gemini 1.5 Flash model and using faq.json for chat response
+- **Chat API*** : Using @platformatic/fastify-ai connect to Gemini 2.5 Flash model and using faq.json for chat response
 
 ### Data Management
 - **JSON Configuration**: FAQ data
