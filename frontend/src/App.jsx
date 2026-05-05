@@ -94,7 +94,7 @@ function formatPrice (value) {
   return `$${formatted}`
 }
 
-const SORT_KEYS = { model: 'label', in: 'input', out: 'output', cache: 'caching' }
+const SORT_KEYS = { model: 'label', provider: 'provider', in: 'input', out: 'output', cache: 'caching' }
 
 function SortIcon ({ dir }) {
   if (!dir) return <span className='ml-0.5 opacity-30'>⇅</span>
@@ -115,9 +115,10 @@ function CostTable ({ models, selected, onChange }) {
   const sorted = [...models].sort((a, b) => {
     if (!sort.col) return 0
     let av, bv
-    if (sort.col === 'model') {
-      av = a.label.toLowerCase()
-      bv = b.label.toLowerCase()
+    if (sort.col === 'model' || sort.col === 'provider') {
+      const key = sort.col === 'model' ? 'label' : 'provider'
+      av = (a[key] || '').toLowerCase()
+      bv = (b[key] || '').toLowerCase()
     } else {
       const key = SORT_KEYS[sort.col]
       av = a.cost?.token_1m?.[key] ?? Infinity
@@ -130,7 +131,7 @@ function CostTable ({ models, selected, onChange }) {
 
   const th = (col, label, align = 'right') => (
     <th
-      className={`font-medium px-${col === 'cache' ? '3' : '2'} py-2 text-${align} cursor-pointer select-none hover:text-indigo-600 whitespace-nowrap`}
+      className={`font-medium px-2 py-2 text-${align} cursor-pointer select-none hover:text-indigo-600 whitespace-nowrap`}
       onClick={() => toggleSort(col)}
     >
       {label}<SortIcon dir={sort.col === col ? sort.dir : null} />
@@ -142,6 +143,7 @@ function CostTable ({ models, selected, onChange }) {
       <table className='w-full text-xs'>
         <thead className='sticky top-0 bg-gray-50 z-10'>
           <tr className='text-gray-500'>
+            {th('provider', 'Provider', 'left')}
             {th('model', 'Model', 'left')}
             {th('in', 'In')}
             {th('out', 'Out')}
@@ -160,13 +162,16 @@ function CostTable ({ models, selected, onChange }) {
                   active ? 'bg-indigo-50/80' : 'hover:bg-gray-50'
                 }`}
               >
-                <td className='px-3 py-2.5'>
+                <td className='px-2 py-2.5 text-left'>
+                  <span className='text-gray-500 capitalize'>{m.provider}</span>
+                </td>
+                <td className='px-2 py-2.5'>
                   <p className={`font-medium leading-tight ${active ? 'text-indigo-700' : 'text-gray-700'}`}>{m.label}</p>
                   <p className='text-[10px] text-gray-400 mt-0.5'>{m.id}</p>
                 </td>
                 <td className='px-2 py-2.5 text-right text-gray-600'>{formatPrice(tokenCost.input)}</td>
                 <td className='px-2 py-2.5 text-right text-gray-600'>{formatPrice(tokenCost.output)}</td>
-                <td className='px-3 py-2.5 text-right text-gray-600'>{formatPrice(tokenCost.caching)}</td>
+                <td className='px-2 py-2.5 text-right text-gray-600'>{formatPrice(tokenCost.caching)}</td>
               </tr>
             )
           })}
@@ -262,7 +267,7 @@ export default function App () {
 
   return (
     <div className='min-h-dvh bg-gradient-to-b from-slate-50 to-gray-100 lg:p-4'>
-      <div className='mx-auto h-dvh max-w-6xl lg:h-[calc(100dvh-2rem)] lg:grid lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-4'>
+      <div className='mx-auto h-dvh max-w-7xl lg:h-[calc(100dvh-2rem)] lg:grid lg:grid-cols-[minmax(0,1fr)_34rem] lg:gap-4'>
         <div className='flex flex-col h-full bg-gradient-to-b from-slate-50 to-gray-100 lg:rounded-2xl lg:overflow-hidden lg:border lg:border-gray-200 lg:shadow-sm'>
           {/* Header */}
           <header className='bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-3.5 flex items-center gap-3 shadow-lg flex-shrink-0'>
