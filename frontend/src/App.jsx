@@ -23,10 +23,13 @@ function saveMessages (messages) {
   try { localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages)) } catch {}
 }
 
-function Avatar () {
+function Avatar ({ model }) {
+  const label = model
+    ? model.split(/[-/]/).filter(Boolean).slice(0, 2).map(s => s[0].toUpperCase()).join('')
+    : 'CS'
   return (
     <div className='flex-shrink-0 w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-md mr-2 mt-1'>
-      <span className='text-white text-xs font-bold tracking-wide'>CS</span>
+      <span className='text-white text-xs font-bold tracking-wide'>{label}</span>
     </div>
   )
 }
@@ -35,7 +38,7 @@ function ChatBubble ({ message }) {
   const isUser = message.role === 'user'
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
-      {!isUser && <Avatar />}
+      {!isUser && <Avatar model={message.model} />}
       <div className={`max-w-[78%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap shadow-sm ${
         isUser
           ? 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white rounded-br-sm'
@@ -50,10 +53,10 @@ function ChatBubble ({ message }) {
   )
 }
 
-function TypingIndicator () {
+function TypingIndicator ({ model }) {
   return (
     <div className='flex justify-start mb-4'>
-      <Avatar />
+      <Avatar model={model} />
       <div className='bg-white border border-gray-100 rounded-2xl rounded-bl-sm px-4 py-3 shadow'>
         <div className='flex gap-1.5 items-center h-4'>
           {[0, 150, 300].map(delay => (
@@ -211,7 +214,7 @@ export default function App () {
       {/* Messages */}
       <main className='flex-1 overflow-y-auto px-4 pt-2 pb-2 scrollbar-hide'>
         {messages.map(msg => <ChatBubble key={msg.id} message={msg} />)}
-        {loading && <TypingIndicator />}
+        {loading && <TypingIndicator model={selectedModel} />}
         {error && (
           <div className='mx-2 mb-3 flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5'>
             <svg className='w-4 h-4 flex-shrink-0' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
