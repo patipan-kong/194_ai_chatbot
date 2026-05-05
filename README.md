@@ -25,18 +25,31 @@ FAQ data is in Japanese; answers are translated to English when needed.
 ### AI Model Selection
 Users can switch between models in the chat UI:
 
-| Model | Provider | API Key |
-|---|---|---|
-| Gemini 2.5 Flash | Google Gemini | `GEMINI_API_KEY` |
-| GPT-5 Mini | OpenAI | `OPENAI_API_KEY` |
-| GPT-5 Nano | OpenAI | `OPENAI_API_KEY` |
-| Llama 3.1 8B Instant | Groq | `GROQ_API_KEY` |
+| Provider | API Key |
+|---|---|
+| Gemini | `GEMINI_API_KEY` |
+| OpenAI | `OPENAI_API_KEY` |
+| Groq | `GROQ_API_KEY` |
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+
+Model entries are configured in `api/ai-model.json` and returned by `GET /api/models`.
+Each model can define:
+- `id` (frontend/internal ID)
+- `apiModel` (optional provider-specific real model name)
+- `provider`
+- `temperature`
+- `cost.token_1m` (input/output/cache pricing for UI display)
+
+Current configured models include Gemini, OpenAI, Groq, Anthropic, and DeepSeek variants.
 
 ### User Experience
 - **Mobile-first design**: Optimized for thumb-friendly interactions
 - **Chat history**: Persisted in `localStorage` — survives page reload
 - **Session persistence**: Session ID stored in `localStorage`
 - **Model preference**: Last selected model saved in `localStorage`
+- **Cost panel (desktop)**: Right-side model cost table (USD per 1M tokens)
+- **Sortable costs**: Sort by Model / In / Out / Cache from table header
 - **Error handling**: Graceful fallbacks and user-friendly error messages
 - **Restore chat**: Previous conversation restored on page reload
 
@@ -52,11 +65,19 @@ Users can switch between models in the chat UI:
 
 ### API
 - **Fastify 5** — fast Node.js web framework
-- **`openai` npm package** — unified OpenAI-compatible client for all providers
+- **`openai` npm package** — OpenAI-compatible providers (OpenAI, Groq, DeepSeek, etc.)
+- **`@google/genai`** — native Gemini path with context caching support
+- **`@anthropic-ai/sdk`** — native Anthropic path for Claude models
 - Routes requests to the correct provider based on selected model:
   - **Gemini** via `https://generativelanguage.googleapis.com/v1beta/openai/`
   - **OpenAI** via default OpenAI endpoint
   - **Groq** via `https://api.groq.com/openai/v1`
+   - **DeepSeek** via `https://api.deepseek.com/v1`
+   - **Anthropic** via native Anthropic SDK
+- **Gemini context caching**:
+   - Cache stored per model ID
+   - TTL 1 hour, refreshed early
+   - Specific models can bypass cache
 - `GET /api/models` — returns the list of available models to the frontend
 - `POST /api/chat` — accepts `message` + `model`, returns `reply`
 
@@ -74,6 +95,7 @@ Users can switch between models in the chat UI:
 ├── api/
 │   ├── package.json
 │   ├── server.js             # Fastify API (multi-model routing)
+│   ├── ai-model.json         # Provider/model registry + pricing metadata
 │   ├── .env                  # API keys (not committed)
 │   └── .env.example          # Template
 └── frontend/
@@ -97,6 +119,8 @@ Get API keys:
 - Groq (free): https://console.groq.com/keys
 - Gemini: https://aistudio.google.com/app/apikey
 - OpenAI: https://platform.openai.com/api-keys
+- DeepSeek: https://platform.deepseek.com/api_keys
+- Anthropic: https://console.anthropic.com/settings/keys
 
 ```bash
 cd api
@@ -111,6 +135,8 @@ npm run dev        # runs on http://localhost:3001
 GEMINI_API_KEY=your_gemini_key
 GROQ_API_KEY=your_groq_key
 OPENAI_API_KEY=your_openai_key
+DEEPSEEK_API_KEY=your_deepseek_key
+ANTHROPIC_API_KEY=your_anthropic_key
 PORT=3001
 ```
 
@@ -135,6 +161,7 @@ VITE_API_URL=http://your-api-host
 
 1. **Welcome screen** — assistant greeting shown on first load
 2. **Model selection** — choose AI model from pill buttons below the header
-3. **Chat** — type a message, press Enter to send
-4. **History** — chat is saved and restored on reload
-5. **Reset** — trash icon in header clears chat and session
+3. **Cost awareness (desktop)** — review model pricing on the right panel (sortable)
+4. **Chat** — type a message, press Enter to send
+5. **History** — chat is saved and restored on reload
+6. **Reset** — trash icon in header clears chat and session
