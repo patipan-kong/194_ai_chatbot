@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import OpenAI from 'openai'
+import { GoogleGenAI } from '@google/genai'
 import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
@@ -21,51 +22,68 @@ const MODELS = [
 ]
 const DEFAULT_MODEL = 'llama-3.1-8b-instant'
 
-// Lazy-initialised OpenAI-compatible clients
+// Module-level system prompt cache (built once)
+const SYSTEM_PROMPT = buildSystemPrompt()
+
+// Cached OpenAI-compatible clients per provider
+const _clients = new Map()
 function getClient (provider) {
+  if (_clients.has(provider)) return _clients.get(provider)
+  let client
   switch (provider) {
     case 'gemini':
-      return new OpenAI({
+      client = new OpenAI({
         apiKey: process.env.GEMINI_API_KEY,
         baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/'
       })
+      break
     case 'openai':
-      return new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY
-      })
+      client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+      break
     case 'groq':
-      return new OpenAI({
+      client = new OpenAI({
         apiKey: process.env.GROQ_API_KEY,
         baseURL: 'https://api.groq.com/openai/v1'
       })
+      break
     default:
       throw new Error(`Unknown provider: ${provider}`)
   }
+  _clients.set(provider, client)
+  return client
+}
+
+// Gemini context cache (TTL 1 h, refreshed 5 min before expiry)
+let _geminiCache = null
+let _geminiCacheExpiry = 0
+
+async function getGeminiCachedContent () {
+  if (_geminiCache && Date.now() < _geminiCacheExpiry) return _geminiCache
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+  const cache = await ai.caches.create({
+    model: 'gemini-2.5-flash',
+    config: { systemInstruction: SYSTEM_PROMPT, ttl: '3600s' }
+  })
+  _geminiCache = { ai, cacheName: cache.name }
+  _geminiCacheExpiry = Date.now() + 55 * 60 * 1000 // refresh 5 min early
+  return _geminiCache
 }
 
 function buildSystemPrompt () {
   const faqText = faq.faq
-    .map(item => `[${item.category}]\nQ: ${item.question}\nA: ${item.answer}`)
-    .join('\n\n')
+    .map(item => `#${item.category}\nQ:${item.question}\nA:${item.answer}`)
+    .join('\n')
 
-  return `You are 194964's smart customer support assistant.
+  return `As 194964 Support. 
+  Rules:
+  - Reply in user's language (JP/EN).
+  - Data source:
+  ${faqText}
 
-LANGUAGE RULE:
-- Detect the user's language and reply in the same language (Japanese or English).
-- You may use the Japanese FAQ data and translate answers to English when needed.
-
-FAQ DATA:
-${faqText}
-
-BEHAVIOR RULES:
-1. If the question is NOT covered by the FAQ above, respond exactly with:
-   "申し訳ございませんが、この情報についてはLINE（@194964）を通じて弊社スタッフに直接お問い合わせいただくことをお勧めします。"
-   (When replying in English, translate this naturally.)
-2. Respond politely and in a friendly manner.
-3. If pricing is unclear, recommend checking the website or asking staff, using:
-   "ウェブサイトを確認するか、スタッフに尋ねることをお勧めします。"
-   (Translate naturally for English replies.)
-4. Always respond as if talking to a real person.`
+  Constraints:
+  1. If not in FAQ, only say: "申し訳ございませんが、この情報についてはLINE（@194964）を通じて弊社スタッフに直接お問い合わせいただくことをอ勧めします。" (Translate for EN).
+  2. Politeness: Friendly & human-like.
+  3. Pricing: If unclear, say: "ウェブサイトを確認するか、スタッフに尋ねることをお勧めします。" (Translate for EN).`
 }
 
 const app = Fastify({ logger: true })
@@ -109,16 +127,31 @@ app.post('/api/chat', async (request, reply) => {
   }
 
   try {
+    if (modelConfig.provider === 'gemini') {
+      // Use Gemini native SDK with context caching; fall back to OpenAI-compat on error
+      try {
+        const { ai, cacheName } = await getGeminiCachedContent()
+        const response = await ai.models.generateContent({
+          model: modelId,
+          config: { cachedContent: cacheName, temperature: modelConfig.temperature },
+          contents: [{ role: 'user', parts: [{ text: message }] }]
+        })
+        return { reply: response.text, model: modelId }
+      } catch (cacheErr) {
+        app.log.warn({ cacheErr }, 'Gemini context cache unavailable, falling back')
+        _geminiCache = null // force refresh on next request
+      }
+    }
+
     const client = getClient(modelConfig.provider)
     const completion = await client.chat.completions.create({
       model: modelId,
       temperature: modelConfig.temperature,
       messages: [
-        { role: 'system', content: buildSystemPrompt() },
+        { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: message }
       ]
     })
-
     return { reply: completion.choices[0].message.content, model: modelId }
   } catch (err) {
     app.log.error({ err }, 'AI request failed')
