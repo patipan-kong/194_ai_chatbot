@@ -34,7 +34,32 @@ function Avatar ({ model }) {
   )
 }
 
-function ChatBubble ({ message }) {
+function ThumbButtons ({ interactionId, feedback, onFeedback }) {
+  return (
+    <div className='flex gap-1 mt-2'>
+      <button
+        onClick={() => onFeedback(interactionId, true)}
+        className={`p-1 rounded transition-colors ${feedback === true ? 'text-green-500' : 'text-gray-300 hover:text-green-500'}`}
+        title='役に立った'
+      >
+        <svg className='w-3.5 h-3.5' fill={feedback === true ? 'currentColor' : 'none'} stroke='currentColor' viewBox='0 0 24 24'>
+          <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5' />
+        </svg>
+      </button>
+      <button
+        onClick={() => onFeedback(interactionId, false)}
+        className={`p-1 rounded transition-colors ${feedback === false ? 'text-red-500' : 'text-gray-300 hover:text-red-500'}`}
+        title='役に立たなかった'
+      >
+        <svg className='w-3.5 h-3.5' fill={feedback === false ? 'currentColor' : 'none'} stroke='currentColor' viewBox='0 0 24 24'>
+          <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06l3.76.94m-7 10v5a2 2 0 002 2h.095c.5 0 .905-.405.905-.905 0-.714.211-1.412.608-2.006L17 13V4m-7 10h2m5-10h2a2 2 0 012 2v6a2 2 0 01-2 2h-2.5' />
+        </svg>
+      </button>
+    </div>
+  )
+}
+
+function ChatBubble ({ message, onFeedback }) {
   const isUser = message.role === 'user'
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
@@ -47,6 +72,9 @@ function ChatBubble ({ message }) {
         {message.text}
         {message.model && !isUser && (
           <span className='block mt-1.5 text-[10px] text-gray-400'>{message.model}</span>
+        )}
+        {!isUser && 'interactionId' in message && (
+          <ThumbButtons interactionId={message.interactionId} feedback={message.feedback} onFeedback={onFeedback} />
         )}
       </div>
     </div>
@@ -248,7 +276,7 @@ export default function App () {
 
       setMessages(prev => [
         ...prev,
-        { id: Date.now() + 1, role: 'assistant', text: data.reply, model: data.model }
+        { id: Date.now() + 1, role: 'assistant', text: data.reply, model: data.model, interactionId: data.interactionId ?? null, feedback: null }
       ])
     } catch {
       setError('メッセージの送信に失敗しました。もう一度お試しください。')
@@ -256,6 +284,21 @@ export default function App () {
       setLoading(false)
       inputRef.current?.focus()
     }
+  }
+
+  async function handleFeedback (interactionId, isThumbUp) {
+    setMessages(prev => prev.map(msg =>
+      msg.interactionId === interactionId ? { ...msg, feedback: isThumbUp } : msg
+    ))
+    if (!interactionId) return
+    try {
+      const apiBase = import.meta.env.VITE_API_URL || ''
+      await fetch(`${apiBase}/api/feedback/${interactionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isThumbUp })
+      })
+    } catch {}
   }
 
   function handleKeyDown (e) {
@@ -308,7 +351,7 @@ export default function App () {
 
           {/* Messages */}
           <main className='flex-1 overflow-y-auto px-4 pt-2 pb-2 scrollbar-hide'>
-            {messages.map(msg => <ChatBubble key={msg.id} message={msg} />)}
+            {messages.map(msg => <ChatBubble key={msg.id} message={msg} onFeedback={handleFeedback} />)}
             {loading && <TypingIndicator model={selectedModel} />}
             {error && (
               <div className='mx-2 mb-3 flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5'>

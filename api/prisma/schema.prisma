@@ -1,0 +1,79 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// 1. ตาราง Knowledge Base (FAQ)
+model KnowledgeBase {
+  id        Int      @id @default(autoincrement())
+  category  String   // เช่น "登録・退会について"
+  question  String   @db.Text
+  answer    String   @db.Text
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@unique([category, question])
+}
+
+// 2. ตารางเก็บ Feedback จาก User (Thumb Up/Down)
+model Interaction {
+  id            Int      @id @default(autoincrement())
+  userQuestion  String   @db.Text
+  aiResponse    String   @db.Text
+  modelId       String   // เช่น "gemini-2.5-flash" เพื่อเก็บสถิติว่าตัวไหนตอบดี
+  isThumbUp     Boolean? // true = up, false = down, null = no feedback yet
+  inputTokens   Int?     // tokens used in prompt
+  outputTokens  Int?     // tokens used in completion
+  responseTime  Int?     // ms from request to response
+  createdAt     DateTime @default(now())
+}
+
+// 3. ตารางสำหรับ Admin (คำถามที่ AI ตอบไม่ได้ หรือโดน Thumb Down)
+model PendingReview {
+  id           Int           @id @default(autoincrement())
+  question     String        @db.Text
+  aiResponse   String?       @db.Text
+  source       ReviewSource  // ที่มาของข้อมูล (UNKNOWN_ANSWER หรือ THUMB_DOWN)
+  status       ReviewStatus  @default(PENDING) // สถานะการจัดการโดย Admin
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+// 4. ตารางสำหรับ Login 
+model AdminUser {
+  id           Int           @id @default(autoincrement())
+  username     String        @db.Text
+  password     String       @db.Text
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+// 5. Key-value settings for editable runtime texts
+model AppSetting {
+  key       String   @id
+  value     String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum ReviewSource {
+  UNKNOWN_ANSWER // กรณี AI ตอบประโยค "申し訳ございませんが..."
+  THUMB_DOWN     // กรณี User กด Thumb Down
+}
+
+enum ReviewStatus {
+  PENDING   // รอตรวจสอบ
+  RESOLVED  // เพิ่มเข้า Knowledge Base แล้ว
+  IGNORED   // ข้ามไป/ไม่สำคัญ
+}
