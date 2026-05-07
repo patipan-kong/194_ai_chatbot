@@ -18,7 +18,9 @@ model KnowledgeBase {
   category  String   // เช่น "登録・退会について"
   question  String   @db.Text
   answer    String   @db.Text
+  status    KBStatus @default(PUBLISHED)
   isActive  Boolean  @default(true)
+  isDelete  Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -28,26 +30,36 @@ model KnowledgeBase {
 
 // 2. ตารางเก็บ Feedback จาก User (Thumb Up/Down)
 model Interaction {
-  id            Int      @id @default(autoincrement())
-  userQuestion  String   @db.Text
-  aiResponse    String   @db.Text
-  modelId       String   // เช่น "gemini-2.5-flash" เพื่อเก็บสถิติว่าตัวไหนตอบดี
-  isThumbUp     Boolean? // true = up, false = down, null = no feedback yet
-  inputTokens   Int?     // tokens used in prompt
-  outputTokens  Int?     // tokens used in completion
-  responseTime  Int?     // ms from request to response
-  createdAt     DateTime @default(now())
+  id            Int            @id @default(autoincrement())
+  userId        String         @default("anonymous") // UUID from client (persistent per browser)
+  settingId     Int            @default(1)
+  userQuestion  String         @db.Text
+  aiResponse    String         @db.Text
+  modelId       String         // เช่น "gemini-2.5-flash" เพื่อเก็บสถิติว่าตัวไหนตอบดี
+  isThumbUp     Boolean?       // true = up, false = down, null = no feedback yet
+  inputTokens   Int?           // tokens used in prompt
+  outputTokens  Int?           // tokens used in completion
+  cost          Float          @default(0)
+  responseTime  Int?           // ms from request to response
+  createdAt     DateTime       @default(now())
+  setting       SystemSetting  @relation(fields: [settingId], references: [id])
+  pendingReview PendingReview?
 }
 
 // 3. ตารางสำหรับ Admin (คำถามที่ AI ตอบไม่ได้ หรือโดน Thumb Down)
 model PendingReview {
-  id           Int           @id @default(autoincrement())
-  question     String        @db.Text
-  aiResponse   String?       @db.Text
-  source       ReviewSource  // ที่มาของข้อมูล (UNKNOWN_ANSWER หรือ THUMB_DOWN)
-  status       ReviewStatus  @default(PENDING) // สถานะการจัดการโดย Admin
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id              Int           @id @default(autoincrement())
+  question        String        @db.Text
+  aiResponse      String?       @db.Text
+  source          ReviewSource  // ที่มาของข้อมูล (UNKNOWN_ANSWER หรือ THUMB_DOWN)
+  status          ReviewStatus  @default(PENDING) // สถานะการจัดการโดย Admin
+  reviewNote      String?       @db.Text
+  resolvedBy      String?
+  resolvedAt      DateTime?
+  interactionId   Int?          @unique // เชื่อมไปยัง Interaction ที่เกิดปัญหา
+  interaction     Interaction?  @relation(fields: [interactionId], references: [id])
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 }
 
 // 4. ตารางสำหรับ Login 
@@ -55,16 +67,34 @@ model AdminUser {
   id           Int           @id @default(autoincrement())
   username     String        @db.Text
   password     String       @db.Text
+  isDelete     Boolean       @default(false)
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
 
-// 5. Key-value settings for editable runtime texts
-model AppSetting {
-  key       String   @id
-  value     String   @db.Text
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model SystemSetting {
+  id                     Int      @id @default(autoincrement())
+  version                Int      @default(1)
+  description            String?  @db.Text
+  systemPromptTemplate   String   @db.Text
+  unknownAnswerCleanText String   @db.Text
+  isActive               Boolean  @default(false)
+  createdBy              String
+  createdAt              DateTime @default(now())
+  interactions           Interaction[]
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  action     String
+  entityType String
+  entityId   Int
+  oldValue   Json?
+  newValue   Json?
+  changedBy  String
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
 }
 
 enum ReviewSource {
@@ -76,4 +106,11 @@ enum ReviewStatus {
   PENDING   // รอตรวจสอบ
   RESOLVED  // เพิ่มเข้า Knowledge Base แล้ว
   IGNORED   // ข้ามไป/ไม่สำคัญ
+}
+
+enum KBStatus {
+  DRAFT
+  REVIEW
+  PUBLISHED
+  ARCHIVED
 }

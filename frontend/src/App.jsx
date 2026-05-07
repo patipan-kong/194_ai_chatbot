@@ -9,6 +9,16 @@ const WELCOME_MESSAGE = {
 const SESSION_KEY = '194964_session_id'
 const MESSAGES_KEY = '194964_messages'
 const MODEL_KEY = '194964_model'
+const USER_ID_KEY = '194964_user_id'
+
+function getOrCreateUserId () {
+  let id = localStorage.getItem(USER_ID_KEY)
+  if (!id) {
+    id = crypto.randomUUID()
+    localStorage.setItem(USER_ID_KEY, id)
+  }
+  return id
+}
 
 function loadMessages () {
   try {
@@ -124,6 +134,14 @@ function formatPrice (value) {
 
 const SORT_KEYS = { model: 'label', provider: 'provider', in: 'input', out: 'output', cache: 'caching' }
 
+function getModelRatingValue (model, key) {
+  const direct = Number(model?.rating?.[key])
+  if (Number.isFinite(direct)) return direct
+  const legacy = Number(model?.[key])
+  if (Number.isFinite(legacy)) return legacy
+  return null
+}
+
 function SortIcon ({ dir }) {
   if (!dir) return <span className='ml-0.5 opacity-30'>⇅</span>
   return <span className='ml-0.5'>{dir === 'asc' ? '↑' : '↓'}</span>
@@ -147,6 +165,11 @@ function CostTable ({ models, selected, onChange }) {
       const key = sort.col === 'model' ? 'label' : 'provider'
       av = (a[key] || '').toLowerCase()
       bv = (b[key] || '').toLowerCase()
+    } else if (sort.col === 'accuracy' || sort.col === 'speed' || sort.col === 'helpfulness') {
+      av = getModelRatingValue(a, sort.col)
+      bv = getModelRatingValue(b, sort.col)
+      if (!Number.isFinite(av)) av = Infinity
+      if (!Number.isFinite(bv)) bv = Infinity
     } else {
       const key = SORT_KEYS[sort.col]
       av = a.cost?.token_1m?.[key] ?? Infinity
@@ -176,6 +199,9 @@ function CostTable ({ models, selected, onChange }) {
             {th('in', 'In')}
             {th('out', 'Out')}
             {th('cache', 'Cache')}
+            {th('accuracy', 'Accuracy')}
+            {th('speed', 'Speed')}
+            {th('helpfulness', 'Helpfulness')}
           </tr>
         </thead>
         <tbody>
@@ -200,6 +226,9 @@ function CostTable ({ models, selected, onChange }) {
                 <td className='px-2 py-2.5 text-right text-gray-600'>{formatPrice(tokenCost.input)}</td>
                 <td className='px-2 py-2.5 text-right text-gray-600'>{formatPrice(tokenCost.output)}</td>
                 <td className='px-2 py-2.5 text-right text-gray-600'>{formatPrice(tokenCost.caching)}</td>
+                <td className='px-2 py-2.5 text-right text-gray-600'>{getModelRatingValue(m, 'accuracy') ?? '-'}</td>
+                <td className='px-2 py-2.5 text-right text-gray-600'>{getModelRatingValue(m, 'speed') ?? '-'}</td>
+                <td className='px-2 py-2.5 text-right text-gray-600'>{getModelRatingValue(m, 'helpfulness') ?? '-'}</td>
               </tr>
             )
           })}
@@ -221,6 +250,7 @@ export default function App () {
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
   const sessionId = useRef(localStorage.getItem(SESSION_KEY) || undefined)
+  const userId = useRef(getOrCreateUserId())
 
   useEffect(() => {
     const apiBase = import.meta.env.VITE_API_URL || ''
@@ -263,7 +293,7 @@ export default function App () {
       const res = await fetch(`${apiBase}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, model: selectedModel, sessionId: sessionId.current })
+        body: JSON.stringify({ message: text, model: selectedModel, sessionId: sessionId.current, userId: userId.current })
       })
 
       if (!res.ok) throw new Error(`Server error: ${res.status}`)
@@ -310,7 +340,7 @@ export default function App () {
 
   return (
     <div className='min-h-dvh bg-gradient-to-b from-slate-50 to-gray-100 lg:p-4'>
-      <div className='mx-auto h-dvh max-w-7xl lg:h-[calc(100dvh-2rem)] lg:grid lg:grid-cols-[minmax(0,1fr)_34rem] lg:gap-4'>
+      <div className='mx-auto h-dvh max-w-7xl lg:h-[calc(100dvh-2rem)] lg:grid lg:grid-cols-[minmax(0,1fr)_46rem] lg:gap-4'>
         <div className='flex flex-col h-full bg-gradient-to-b from-slate-50 to-gray-100 lg:rounded-2xl lg:overflow-hidden lg:border lg:border-gray-200 lg:shadow-sm'>
           {/* Header */}
           <header className='bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-3.5 flex items-center gap-3 shadow-lg flex-shrink-0'>
