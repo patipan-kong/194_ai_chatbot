@@ -4,6 +4,7 @@ import ListPagination from '@/components/list-pagination'
 import FlashMessage from '@/components/flash-message'
 import { apiGet } from '@/lib/admin-api'
 import { activateSystemSetting, createSystemSetting } from '@/actions/system-setting'
+import { updateDefaultModel } from '@/actions/model-config'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 
@@ -14,13 +15,27 @@ export default async function SystemSettingPage({ searchParams }) {
   const params = new URLSearchParams()
   params.set('page', String(page))
   params.set('pageSize', String(pageSize))
-  const { items, total = 0, totalPages = 1 } = await apiGet('/api/admin/system-settings', `?${params.toString()}`)
+  const [settingsData, modelConfig] = await Promise.all([
+    apiGet('/api/admin/system-settings', `?${params.toString()}`),
+    apiGet('/api/admin/models/default')
+  ])
+  const { items, total = 0, totalPages = 1 } = settingsData || {}
   const copyFromId = Number(p?.copyFrom || 0)
   const active = items?.find(x => x.isActive)
   const copySource = items?.find(x => x.id === copyFromId) || null
   const formSeed = copySource || null
   const nextVersion = Number(formSeed?.version || active?.version || 0) + 1
   const flash = String(p?.flash || '')
+  const modelItems = modelConfig?.models || []
+  const defaultModel = modelConfig?.defaultModel || ''
+
+  const modelOptions = modelItems
+    .map(item => ({
+      modelId: item.id,
+      label: item.label || item.id,
+      provider: item.provider || ''
+    }))
+    .filter(item => item.modelId)
 
   async function onCreateSystemSetting(formData) {
     'use server'
@@ -38,9 +53,29 @@ export default async function SystemSettingPage({ searchParams }) {
     redirect(`/system-setting?${params.toString()}`)
   }
 
+  async function onUpdateDefaultModel(formData) {
+    'use server'
+    const result = await updateDefaultModel(formData)
+    const params = new URLSearchParams()
+    params.set('flash', result?.message || 'Saved')
+    redirect(`/system-setting?${params.toString()}`)
+  }
+
   return (
     <AdminShell title='System Setting'>
       <FlashMessage message={flash} />
+
+      <form action={onUpdateDefaultModel} className='card mb-4 flex items-end gap-3'>
+        <div className='min-w-[280px]'>
+          <label className='text-xs text-slate-500'>Default AI Model (frontend chat)</label>
+          <select name='modelId' defaultValue={defaultModel} className='w-full rounded-lg border border-slate-300 px-3 py-2'>
+            {modelOptions.map(model => (
+              <option key={model.modelId} value={model.modelId}>{model.label} ({model.modelId})</option>
+            ))}
+          </select>
+        </div>
+        <button className='rounded-lg bg-brand text-white px-3 py-2 font-semibold'>Set Default Model</button>
+      </form>
 
       <div className='card mb-4'>
         <p className='text-sm'>
@@ -48,7 +83,7 @@ export default async function SystemSettingPage({ searchParams }) {
           then edit and create a new version.
         </p>
       </div>
-
+      
       <form action={onCreateSystemSetting} className='card mb-4 space-y-3'>
         <div className='grid grid-cols-3 gap-3'>
           <div>

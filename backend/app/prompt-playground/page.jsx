@@ -1,9 +1,7 @@
 import AdminShell from '@/components/admin-shell'
 import FlashMessage from '@/components/flash-message'
 import PromptPlaygroundForm from '@/components/prompt-playground-form'
-import { updateDefaultModel } from '@/actions/model-config'
 import { apiGet } from '@/lib/admin-api'
-import { redirect } from 'next/navigation'
 
 export default async function PromptPlaygroundPage({ searchParams }) {
   const p = await searchParams
@@ -46,29 +44,9 @@ export default async function PromptPlaygroundPage({ searchParams }) {
     }))
     .filter(item => item.modelId)
 
-  async function onUpdateDefaultModel(formData) {
-    'use server'
-    const result = await updateDefaultModel(formData)
-    const params = new URLSearchParams()
-    params.set('flash', result?.message || 'Saved')
-    redirect(`/prompt-playground?${params.toString()}`)
-  }
-
   return (
     <AdminShell title='Prompt Playground'>
       <FlashMessage message={flash} />
-
-      <form action={onUpdateDefaultModel} className='card mb-4 flex items-end gap-3'>
-        <div className='min-w-[280px]'>
-          <label className='text-xs text-slate-500'>Default AI Model (frontend chat)</label>
-          <select name='modelId' defaultValue={defaultModel} className='w-full rounded-lg border border-slate-300 px-3 py-2'>
-            {modelOptions.map(model => (
-              <option key={model.modelId} value={model.modelId}>{model.label} ({model.modelId})</option>
-            ))}
-          </select>
-        </div>
-        <button className='rounded-lg bg-brand text-white px-3 py-2 font-semibold'>Set Default Model</button>
-      </form>
 
       <PromptPlaygroundForm
         promptOptions={promptOptions}
