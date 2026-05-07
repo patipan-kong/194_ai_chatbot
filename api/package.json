@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "postinstall": "npx prisma generate",
     "seed": "node prisma/seed.js",
     "db:migrate": "npx prisma migrate deploy",
     "db:push": "npx prisma db push",
