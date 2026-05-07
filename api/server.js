@@ -83,6 +83,20 @@ const _geminiAi = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
 const _geminiCaches = new Map()
 const _anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
+function isProviderConfigured (provider) {
+  const envKey = PROVIDERS[provider]?.envKey
+  return Boolean(envKey && process.env[envKey])
+}
+
+function isGeminiLocationUnsupportedError (err) {
+  const message = typeof err?.message === 'string' ? err.message : ''
+  return /User location is not supported for the API use/i.test(message)
+}
+
+function findFallbackModel (excludedProviders = []) {
+  return MODELS.find(model => !excludedProviders.includes(model.provider) && isProviderConfigured(model.provider)) || null
+}
+
 function normalizeChatSettings (chat = {}) {
   const maxMessageChars = Number.isFinite(chat?.maxMessageChars) && chat.maxMessageChars > 0
     ? Math.floor(chat.maxMessageChars)
@@ -289,7 +303,7 @@ function validateChatRequestPayload (rawBody = {}) {
   if (!modelConfig) return { error: `Unknown model: ${modelId}` }
 
   const envKey = PROVIDERS[modelConfig.provider]?.envKey
-  if (!envKey || !process.env[envKey]) {
+  if (!isProviderConfigured(modelConfig.provider)) {
     return { error: `${envKey} is not set in .env`, statusCode: 500 }
   }
 
@@ -416,6 +430,25 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
       if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
       return { reply, model: modelId, interactionId }
     } catch (geminiErr) {
+      if (isGeminiLocationUnsupportedError(geminiErr)) {
+        const fallbackModel = findFallbackModel(['gemini'])
+        if (fallbackModel) {
+          app.log.warn({ modelId, fallbackModelId: fallbackModel.id }, 'Gemini unavailable in current deployment region, retrying with fallback model')
+          return generateChatResponse({
+            message,
+            userId,
+            modelId: fallbackModel.id,
+            modelConfig: fallbackModel,
+            apiModelId: fallbackModel.apiModel || fallbackModel.id,
+            onToken
+          })
+        }
+
+        const regionErr = new Error('Gemini is not available from the current deployment region and no fallback model is configured')
+        regionErr.cause = geminiErr
+        throw regionErr
+      }
+
       app.log.error({ geminiErr, modelId }, 'Gemini native request failed')
       throw geminiErr
     }
@@ -500,7 +533,7 @@ async function runPromptPlaygroundTest ({ question, promptTemplate, settingId, m
     }
 
     const envKey = PROVIDERS[modelConfig.provider]?.envKey
-    if (!envKey || !process.env[envKey]) {
+    if (!isProviderConfigured(modelConfig.provider)) {
       results.push({ modelId, error: `${envKey} is not set in .env` })
       continue
     }
