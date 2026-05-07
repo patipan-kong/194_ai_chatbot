@@ -21,7 +21,7 @@ const AI_MODEL_CONFIG_PATH = join(__dirname, 'ai-model.json')
 let aiModelConfig = JSON.parse(readFileSync(AI_MODEL_CONFIG_PATH, 'utf-8'))
 const MODELS = aiModelConfig.models
 const PROVIDERS = aiModelConfig.providers
-const DEFAULT_MODEL = aiModelConfig.default
+let DEFAULT_MODEL = aiModelConfig.default
 const DEFAULT_CHAT_SETTINGS = {
   maxMessageChars: 2000,
   rateLimit: { max: 30, timeWindow: '1 minute' }
@@ -122,6 +122,16 @@ function updateAlertSettings (patch = {}) {
   ALERT_SETTINGS = next
   persistAiModelConfig()
   return ALERT_SETTINGS
+}
+
+function setDefaultModel (modelId) {
+  const nextModel = String(modelId || '').trim()
+  if (!nextModel) return DEFAULT_MODEL
+  if (!MODELS.some(model => model.id === nextModel)) return DEFAULT_MODEL
+  aiModelConfig = { ...aiModelConfig, default: nextModel }
+  DEFAULT_MODEL = nextModel
+  persistAiModelConfig()
+  return DEFAULT_MODEL
 }
 
 async function getGeminiCachedContent (modelId) {
@@ -251,7 +261,10 @@ app.get('/api/models', async () => ({ models: MODELS, default: DEFAULT_MODEL }))
 
 await registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTextConfig, {
   getAlertSettings: () => ({ ...ALERT_SETTINGS }),
-  updateAlertSettings
+  updateAlertSettings,
+  getDefaultModel: () => DEFAULT_MODEL,
+  setDefaultModel,
+  runPromptPlaygroundTest
 })
 
 function validateChatRequestPayload (rawBody = {}) {
@@ -295,13 +308,14 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
   if (exactFaqAnswer) {
     const reply = cleanResponse(exactFaqAnswer)
     if (onToken) await streamTextChunks(reply, onToken)
-    const interactionId = await logInteraction({
+    const interactionMeta = await logInteraction({
       userId,
       modelId,
       message,
       reply,
       responseTime: Date.now() - t0
     })
+    const interactionId = interactionMeta?.id || null
     return { reply, model: modelId, interactionId }
   }
 
@@ -320,7 +334,7 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
     const isNoAnswer = isNoAnswerResponse(text)
     const reply = cleanResponse(text)
     if (onToken) await streamTextChunks(reply, onToken)
-    const interactionId = await logInteraction({
+    const interactionMeta = await logInteraction({
       userId,
       modelId,
       message,
@@ -329,6 +343,7 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
       inputTokens: response.usage?.input_tokens,
       outputTokens: response.usage?.output_tokens
     })
+    const interactionId = interactionMeta?.id || null
     if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
     return { reply, model: modelId, interactionId }
   }
@@ -348,7 +363,7 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
       const isNoAnswer = isNoAnswerResponse(response.text)
       const reply = cleanResponse(response.text)
       if (onToken) await streamTextChunks(reply, onToken)
-      const interactionId = await logInteraction({
+      const interactionMeta = await logInteraction({
         userId,
         modelId,
         message,
@@ -357,6 +372,7 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
         inputTokens: response.usageMetadata?.promptTokenCount,
         outputTokens: response.usageMetadata?.candidatesTokenCount
       })
+      const interactionId = interactionMeta?.id || null
       if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
       return { reply, model: modelId, interactionId }
     } catch (cacheErr) {
@@ -387,7 +403,8 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
 
     const isNoAnswer = isNoAnswerResponse(streamedText)
     const reply = cleanResponse(streamedText)
-    const interactionId = await logInteraction({ userId, modelId, message, reply, responseTime: Date.now() - t0 })
+    const interactionMeta = await logInteraction({ userId, modelId, message, reply, responseTime: Date.now() - t0 })
+    const interactionId = interactionMeta?.id || null
     if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
     return { reply, model: modelId, interactionId }
   }
@@ -402,7 +419,7 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
   })
   const isNoAnswer = isNoAnswerResponse(completion.choices[0].message.content)
   const reply = cleanResponse(completion.choices[0].message.content)
-  const interactionId = await logInteraction({
+  const interactionMeta = await logInteraction({
     userId,
     modelId,
     message,
@@ -411,8 +428,132 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
     inputTokens: completion.usage?.prompt_tokens,
     outputTokens: completion.usage?.completion_tokens
   })
+  const interactionId = interactionMeta?.id || null
   if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
   return { reply, model: modelId, interactionId }
+}
+
+async function runPromptPlaygroundTest ({ question, promptTemplate, settingId, modelIds, changedBy }) {
+  const selectedSetting = settingId
+    ? await prisma.systemSetting.findUnique({ where: { id: settingId } })
+    : null
+  const activeSetting = selectedSetting || await getOrCreateActiveSystemSetting()
+
+  const rows = await prisma.knowledgeBase.findMany({
+    where: { status: 'PUBLISHED', isDelete: false },
+    orderBy: { updatedAt: 'desc' }
+  })
+
+  const promptSource = typeof promptTemplate === 'string' && promptTemplate.trim()
+    ? promptTemplate
+    : activeSetting.systemPromptTemplate
+  const systemPrompt = buildSystemPrompt(promptSource, rows)
+  const unknownAnswerCleanText = activeSetting.unknownAnswerCleanText
+  const userId = `playground:${changedBy || 'admin'}`
+  const results = []
+
+  for (const modelId of modelIds) {
+    const modelConfig = MODELS.find(m => m.id === modelId)
+    if (!modelConfig) {
+      results.push({ modelId, error: `Unknown model: ${modelId}` })
+      continue
+    }
+
+    const envKey = PROVIDERS[modelConfig.provider]?.envKey
+    if (!envKey || !process.env[envKey]) {
+      results.push({ modelId, error: `${envKey} is not set in .env` })
+      continue
+    }
+
+    const apiModelId = modelConfig.apiModel || modelId
+    const t0 = Date.now()
+
+    try {
+      let text = ''
+      let inputTokens = null
+      let outputTokens = null
+
+      if (modelConfig.provider === 'anthropic') {
+        const response = await _anthropicClient.messages.create({
+          model: apiModelId,
+          system: systemPrompt,
+          temperature: modelConfig.temperature,
+          max_tokens: 1024,
+          messages: [{ role: 'user', content: question }]
+        })
+        text = response.content
+          .filter(block => block.type === 'text')
+          .map(block => block.text)
+          .join('\n')
+        inputTokens = response.usage?.input_tokens ?? null
+        outputTokens = response.usage?.output_tokens ?? null
+      } else if (modelConfig.provider === 'gemini' && modelId.includes('2.5')) {
+        const response = await _geminiAi.models.generateContent({
+          model: apiModelId,
+          config: { systemInstruction: systemPrompt, temperature: modelConfig.temperature },
+          contents: [{ role: 'user', parts: [{ text: question }] }]
+        })
+        text = response.text || ''
+        inputTokens = response.usageMetadata?.promptTokenCount ?? null
+        outputTokens = response.usageMetadata?.candidatesTokenCount ?? null
+      } else {
+        const client = getClient(modelConfig.provider)
+        const completion = await client.chat.completions.create({
+          model: apiModelId,
+          temperature: modelConfig.temperature,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: question }
+          ]
+        })
+        text = completion.choices[0]?.message?.content || ''
+        inputTokens = completion.usage?.prompt_tokens ?? null
+        outputTokens = completion.usage?.completion_tokens ?? null
+      }
+
+      const responseTime = Date.now() - t0
+      const answer = cleanResponse(text, unknownAnswerCleanText)
+      const interactionMeta = await logInteraction({
+        userId,
+        modelId,
+        message: question,
+        reply: answer,
+        responseTime,
+        inputTokens,
+        outputTokens,
+        settingId: activeSetting.id
+      })
+
+      results.push({
+        modelId,
+        answer,
+        latencyMs: responseTime,
+        cost: interactionMeta?.cost || 0,
+        interactionId: interactionMeta?.id || null
+      })
+    } catch (err) {
+      app.log.error({ err, modelId }, 'Prompt playground test failed')
+      results.push({ modelId, error: err.message || 'Model execution failed' })
+    }
+  }
+
+  let historyId = null
+  try {
+    const history = await prisma.promptPlaygroundRun.create({
+      data: {
+        question,
+        promptTemplate: promptSource,
+        selectedModels: modelIds,
+        result: results,
+        createdBy: changedBy || 'admin'
+      }
+    })
+    historyId = history.id
+  } catch (err) {
+    app.log.warn({ err }, 'Failed to store prompt playground history')
+  }
+
+  return { items: results, historyId }
 }
 
 app.post('/api/chat', {
@@ -522,13 +663,13 @@ const port = process.env.PORT || 3001
 await refreshRuntimeTextConfig(true)
 await app.listen({ port, host: '0.0.0.0' })
 
-async function logInteraction ({ userId, modelId, message, reply, responseTime, inputTokens, outputTokens }) {
+async function logInteraction ({ userId, modelId, message, reply, responseTime, inputTokens, outputTokens, settingId }) {
   try {
     const cost = calculateInteractionCost({ modelId, inputTokens, outputTokens })
     const record = await prisma.interaction.create({
       data: {
         userId:       userId || 'anonymous',
-        settingId:    ACTIVE_SYSTEM_SETTING_ID || 1,
+        settingId:    settingId || ACTIVE_SYSTEM_SETTING_ID || 1,
         modelId,
         userQuestion: message,
         aiResponse:   reply,
@@ -538,7 +679,13 @@ async function logInteraction ({ userId, modelId, message, reply, responseTime, 
         cost
       }
     })
-    return record.id
+    return {
+      id: record.id,
+      cost,
+      inputTokens: inputTokens ?? null,
+      outputTokens: outputTokens ?? null,
+      responseTime: responseTime ?? null
+    }
   } catch (err) {
     app.log.warn({ err }, 'Failed to log interaction')
     return null
@@ -583,11 +730,11 @@ function isNoAnswerResponse (text) {
   return cleaned === UNKNOWN_ANSWER_TOKEN
 }
 
-function cleanResponse(text) {
+function cleanResponse(text, unknownAnswerCleanText = UNKNOWN_ANSWER_CLEAN_TEXT) {
   if (typeof text !== 'string') return ''
   let cleaned = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim()
   if (cleaned === UNKNOWN_ANSWER_TOKEN) {
-    cleaned = UNKNOWN_ANSWER_CLEAN_TEXT
+    cleaned = unknownAnswerCleanText
   }
   return cleaned
 }

@@ -97,6 +97,16 @@ model AuditLog {
   createdAt  DateTime @default(now())
 }
 
+model PromptPlaygroundRun {
+  id            Int      @id @default(autoincrement())
+  question      String   @db.Text
+  promptTemplate String  @db.Text
+  selectedModels Json?
+  result        Json
+  createdBy     String
+  createdAt     DateTime @default(now())
+}
+
 enum ReviewSource {
   UNKNOWN_ANSWER // กรณี AI ตอบประโยค "申し訳ございませんが..."
   THUMB_DOWN     // กรณี User กด Thumb Down

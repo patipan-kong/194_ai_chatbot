@@ -451,6 +451,102 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     return { item: updated }
   })
 
+  app.post('/api/admin/prompt-playground/compare', { preHandler: adminGuard }, async (request, reply) => {
+    if (typeof configApi.runPromptPlaygroundTest !== 'function') {
+      return reply.code(500).send({ error: 'Prompt playground is not configured' })
+    }
+
+    const body = request.body || {}
+    const question = String(body.question || '').trim()
+    const promptTemplate = String(body.promptTemplate || '')
+    const settingId = toInt(body.settingId, 0) || null
+    const changedBy = String(request.headers['x-admin-user'] || 'admin')
+    const models = Array.isArray(body.models)
+      ? body.models.map(item => String(item || '').trim()).filter(Boolean)
+      : []
+
+    if (!question) {
+      return reply.code(400).send({ error: 'question is required' })
+    }
+    if (!models.length) {
+      return reply.code(400).send({ error: 'at least one model is required' })
+    }
+
+    const compareResult = await configApi.runPromptPlaygroundTest({
+      question,
+      promptTemplate,
+      settingId,
+      modelIds: models,
+      changedBy
+    })
+
+    const items = Array.isArray(compareResult)
+      ? compareResult
+      : (compareResult?.items || [])
+    const historyId = Number(compareResult?.historyId || 0) || null
+    return { items, historyId }
+  })
+
+  app.get('/api/admin/prompt-playground/history', { preHandler: adminGuard }, async request => {
+    const query = request.query || {}
+    const pagination = normalizePageQuery(query, { page: 1, pageSize: 20, maxPageSize: 200 })
+
+    try {
+      const [items, total] = await Promise.all([
+        prisma.promptPlaygroundRun.findMany({
+          orderBy: { createdAt: 'desc' },
+          skip: pagination.skip,
+          take: pagination.pageSize,
+          select: {
+            id: true,
+            question: true,
+            promptTemplate: true,
+            selectedModels: true,
+            result: true,
+            createdBy: true,
+            createdAt: true
+          }
+        }),
+        prisma.promptPlaygroundRun.count()
+      ])
+
+      return {
+        items,
+        page: pagination.page,
+        pageSize: pagination.pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pagination.pageSize))
+      }
+    } catch (err) {
+      app.log.warn({ err }, 'Prompt playground history list unavailable')
+      return { items: [], page: 1, pageSize: pagination.pageSize, total: 0, totalPages: 1 }
+    }
+  })
+
+  app.get('/api/admin/prompt-playground/history/:id', { preHandler: adminGuard }, async request => {
+    const id = toInt(request.params.id)
+    if (!id) return { item: null }
+
+    try {
+      const item = await prisma.promptPlaygroundRun.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          question: true,
+          promptTemplate: true,
+          selectedModels: true,
+          result: true,
+          createdBy: true,
+          createdAt: true
+        }
+      })
+      return { item }
+    } catch (err) {
+      app.log.warn({ err }, 'Prompt playground history detail unavailable')
+      return { item: null }
+    }
+  })
+
   app.get('/api/admin/interactions', { preHandler: adminGuard }, async request => {
     const query = request.query || {}
     const { from, to } = normalizeDateRange(query)
@@ -463,6 +559,8 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       createdAt: { gte: from, lte: to },
       ...(query.modelId ? { modelId: query.modelId } : {}),
       ...(query.question ? { userQuestion: { contains: query.question, mode: 'insensitive' } } : {}),
+      ...(query.source === 'playground' ? { userId: { startsWith: 'playground:' } } : {}),
+      ...(query.source === 'chat' ? { NOT: { userId: { startsWith: 'playground:' } } } : {}),
       ...(query.isThumbUp === 'true' ? { isThumbUp: true } : {}),
       ...(query.isThumbUp === 'false' ? { isThumbUp: false } : {})
     }
@@ -492,6 +590,55 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       ? configApi.getAlertSettings()
       : { dailyCostThreshold: 5, monthlyCostThreshold: 100, pendingReviewThreshold: 20, notifyTarget: 'dashboard' }
     return { item: settings }
+  })
+
+  app.get('/api/admin/models/default', { preHandler: adminGuard }, async () => {
+    const defaultModel = typeof configApi.getDefaultModel === 'function'
+      ? configApi.getDefaultModel()
+      : null
+    return {
+      defaultModel,
+      models: MODELS.map(model => ({
+        id: model.id,
+        label: model.label,
+        provider: model.provider,
+        cost: model.cost || null,
+        rating: model.rating || null
+      }))
+    }
+  })
+
+  app.patch('/api/admin/models/default', { preHandler: adminGuard }, async (request, reply) => {
+    if (typeof configApi.setDefaultModel !== 'function') {
+      return reply.code(500).send({ error: 'Model config updater is not configured' })
+    }
+
+    const body = request.body || {}
+    const modelId = String(body.modelId || '').trim()
+    if (!modelId) {
+      return reply.code(400).send({ error: 'modelId is required' })
+    }
+    if (!MODELS.some(model => model.id === modelId)) {
+      return reply.code(400).send({ error: `Unknown model: ${modelId}` })
+    }
+
+    const changedBy = String(request.headers['x-admin-user'] || 'admin')
+    const oldDefaultModel = typeof configApi.getDefaultModel === 'function' ? configApi.getDefaultModel() : null
+    const oldValue = { defaultModel: oldDefaultModel }
+    const nextDefaultModel = configApi.setDefaultModel(modelId)
+    const newValue = { defaultModel: nextDefaultModel }
+
+    await writeAudit({
+      action: 'UPDATE_DEFAULT_MODEL',
+      entityType: 'ModelConfig',
+      entityId: 0,
+      oldValue,
+      newValue,
+      changedBy,
+      request
+    })
+
+    return newValue
   })
 
   app.patch('/api/admin/alerts/settings', { preHandler: adminGuard }, async request => {
@@ -530,6 +677,8 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       createdAt: { gte: from, lte: to },
       ...(body.modelId ? { modelId: String(body.modelId) } : {}),
       ...(body.question ? { userQuestion: { contains: String(body.question), mode: 'insensitive' } } : {}),
+      ...(body.source === 'playground' ? { userId: { startsWith: 'playground:' } } : {}),
+      ...(body.source === 'chat' ? { NOT: { userId: { startsWith: 'playground:' } } } : {}),
       ...(body.isThumbUp === 'true' ? { isThumbUp: true } : {}),
       ...(body.isThumbUp === 'false' ? { isThumbUp: false } : {})
     }

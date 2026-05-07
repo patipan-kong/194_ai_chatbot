@@ -8,7 +8,6 @@ const WELCOME_MESSAGE = {
 
 const SESSION_KEY = '194964_session_id'
 const MESSAGES_KEY = '194964_messages'
-const MODEL_KEY = '194964_model'
 const USER_ID_KEY = '194964_user_id'
 
 function getOrCreateUserId () {
@@ -106,170 +105,21 @@ function TypingIndicator ({ model }) {
   )
 }
 
-function ModelPicker ({ models, selected, onChange }) {
-  return (
-    <div className='flex flex-wrap gap-1.5 py-0.5'>
-      {models.map(m => (
-        <button
-          key={m.id}
-          onClick={() => onChange(m.id)}
-          className={`flex-shrink-0 text-xs px-3 py-1 rounded-full border transition-all ${
-            selected === m.id
-              ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-              : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
-          }`}
-        >
-          {m.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function formatPrice (value) {
-  if (typeof value !== 'number') return '-'
-  const formatted = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 }).format(value)
-  return `$${formatted}`
-}
-
-const SORT_KEYS = { model: 'label', provider: 'provider', in: 'input', out: 'output', cache: 'caching' }
-
-function getModelRatingValue (model, key) {
-  const direct = Number(model?.rating?.[key])
-  if (Number.isFinite(direct)) return direct
-  const legacy = Number(model?.[key])
-  if (Number.isFinite(legacy)) return legacy
-  return null
-}
-
-function SortIcon ({ dir }) {
-  if (!dir) return <span className='ml-0.5 opacity-30'>⇅</span>
-  return <span className='ml-0.5'>{dir === 'asc' ? '↑' : '↓'}</span>
-}
-
-function CostTable ({ models, selected, onChange }) {
-  const [sort, setSort] = useState({ col: null, dir: null })
-
-  function toggleSort (col) {
-    setSort(prev =>
-      prev.col !== col ? { col, dir: 'asc' }
-      : prev.dir === 'asc' ? { col, dir: 'desc' }
-      : { col: null, dir: null }
-    )
-  }
-
-  const sorted = [...models].sort((a, b) => {
-    if (!sort.col) return 0
-    let av, bv
-    if (sort.col === 'model' || sort.col === 'provider') {
-      const key = sort.col === 'model' ? 'label' : 'provider'
-      av = (a[key] || '').toLowerCase()
-      bv = (b[key] || '').toLowerCase()
-    } else if (sort.col === 'accuracy' || sort.col === 'speed' || sort.col === 'helpfulness') {
-      av = getModelRatingValue(a, sort.col)
-      bv = getModelRatingValue(b, sort.col)
-      if (!Number.isFinite(av)) av = Infinity
-      if (!Number.isFinite(bv)) bv = Infinity
-    } else {
-      const key = SORT_KEYS[sort.col]
-      av = a.cost?.token_1m?.[key] ?? Infinity
-      bv = b.cost?.token_1m?.[key] ?? Infinity
-    }
-    if (av < bv) return sort.dir === 'asc' ? -1 : 1
-    if (av > bv) return sort.dir === 'asc' ? 1 : -1
-    return 0
-  })
-
-  const th = (col, label, align = 'right') => (
-    <th
-      className={`font-medium px-2 py-2 text-${align} cursor-pointer select-none hover:text-indigo-600 whitespace-nowrap`}
-      onClick={() => toggleSort(col)}
-    >
-      {label}<SortIcon dir={sort.col === col ? sort.dir : null} />
-    </th>
-  )
-
-  return (
-    <div className='flex-1 overflow-auto scrollbar-hide'>
-      <table className='w-full text-xs'>
-        <thead className='sticky top-0 bg-gray-50 z-10'>
-          <tr className='text-gray-500'>
-            {th('provider', 'Provider', 'left')}
-            {th('model', 'Model', 'left')}
-            {th('in', 'In')}
-            {th('out', 'Out')}
-            {th('cache', 'Cache')}
-            {th('accuracy', 'Accuracy')}
-            {th('speed', 'Speed')}
-            {th('helpfulness', 'Helpfulness')}
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map(m => {
-            const tokenCost = m.cost?.token_1m || {}
-            const active = selected === m.id
-            return (
-              <tr
-                key={m.id}
-                onClick={() => onChange(m.id)}
-                className={`border-t border-gray-100 cursor-pointer transition-colors ${
-                  active ? 'bg-indigo-50/80' : 'hover:bg-gray-50'
-                }`}
-              >
-                <td className='px-2 py-2.5 text-left'>
-                  <span className='text-gray-500 capitalize'>{m.provider}</span>
-                </td>
-                <td className='px-2 py-2.5'>
-                  <p className={`font-medium leading-tight ${active ? 'text-indigo-700' : 'text-gray-700'}`}>{m.label}</p>
-                  <p className='text-[10px] text-gray-400 mt-0.5'>{m.id}</p>
-                </td>
-                <td className='px-2 py-2.5 text-right text-gray-600'>{formatPrice(tokenCost.input)}</td>
-                <td className='px-2 py-2.5 text-right text-gray-600'>{formatPrice(tokenCost.output)}</td>
-                <td className='px-2 py-2.5 text-right text-gray-600'>{formatPrice(tokenCost.caching)}</td>
-                <td className='px-2 py-2.5 text-right text-gray-600'>{getModelRatingValue(m, 'accuracy') ?? '-'}</td>
-                <td className='px-2 py-2.5 text-right text-gray-600'>{getModelRatingValue(m, 'speed') ?? '-'}</td>
-                <td className='px-2 py-2.5 text-right text-gray-600'>{getModelRatingValue(m, 'helpfulness') ?? '-'}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
 export default function App () {
   const [messages, setMessages] = useState(loadMessages)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [models, setModels] = useState([])
-  const [selectedModel, setSelectedModel] = useState(
-    () => localStorage.getItem(MODEL_KEY) || 'llama-3.1-8b-instant'
-  )
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
   const sessionId = useRef(localStorage.getItem(SESSION_KEY) || undefined)
   const userId = useRef(getOrCreateUserId())
-
-  useEffect(() => {
-    const apiBase = import.meta.env.VITE_API_URL || ''
-    fetch(`${apiBase}/api/models`)
-      .then(r => r.json())
-      .then(data => setModels(data.models || []))
-      .catch(() => {})
-  }, [])
 
   useEffect(() => { saveMessages(messages) }, [messages])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
-
-  function handleModelChange (id) {
-    setSelectedModel(id)
-    localStorage.setItem(MODEL_KEY, id)
-  }
 
   function clearChat () {
     localStorage.removeItem(MESSAGES_KEY)
@@ -293,7 +143,7 @@ export default function App () {
       const res = await fetch(`${apiBase}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, model: selectedModel, sessionId: sessionId.current, userId: userId.current })
+        body: JSON.stringify({ message: text, sessionId: sessionId.current, userId: userId.current })
       })
 
       if (!res.ok) throw new Error(`Server error: ${res.status}`)
@@ -341,7 +191,7 @@ export default function App () {
   return (
     <div className='min-h-dvh bg-gradient-to-b from-slate-50 to-gray-100 lg:p-4'>
       <div className='mx-auto h-dvh max-w-7xl lg:h-[calc(100dvh-2rem)] lg:grid lg:grid-cols-[minmax(0,1fr)_46rem] lg:gap-4'>
-        <div className='flex flex-col h-full bg-gradient-to-b from-slate-50 to-gray-100 lg:rounded-2xl lg:overflow-hidden lg:border lg:border-gray-200 lg:shadow-sm'>
+        <div className='flex flex-col h-full bg-gradient-to-b from-slate-50 to-gray-100 lg:rounded-2xl lg:overflow-hidden lg:border lg:border-gray-200 lg:shadow-sm lg:col-span-2'>
           {/* Header */}
           <header className='bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-3.5 flex items-center gap-3 shadow-lg flex-shrink-0'>
             <div className='w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center ring-2 ring-white/30'>
@@ -362,14 +212,6 @@ export default function App () {
             </button>
           </header>
 
-          {/* Model picker */}
-          {models.length > 0 && (
-            <div className='px-4 pt-3 pb-2 bg-white border-b border-gray-100 flex-shrink-0'>
-              <p className='text-[11px] text-gray-400 mb-1.5'>AI モデル選択</p>
-              <ModelPicker models={models} selected={selectedModel} onChange={handleModelChange} />
-            </div>
-          )}
-
           {/* Date divider */}
           <div className='flex items-center gap-2 px-4 pt-3 pb-1'>
             <div className='flex-1 h-px bg-gray-200' />
@@ -382,7 +224,7 @@ export default function App () {
           {/* Messages */}
           <main className='flex-1 overflow-y-auto px-4 pt-2 pb-2 scrollbar-hide'>
             {messages.map(msg => <ChatBubble key={msg.id} message={msg} onFeedback={handleFeedback} />)}
-            {loading && <TypingIndicator model={selectedModel} />}
+            {loading && <TypingIndicator model={null} />}
             {error && (
               <div className='mx-2 mb-3 flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5'>
                 <svg className='w-4 h-4 flex-shrink-0' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
@@ -423,13 +265,6 @@ export default function App () {
           </footer>
         </div>
 
-        <aside className='hidden lg:flex lg:flex-col bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden'>
-          <div className='px-4 py-3 border-b border-gray-100 bg-gray-50'>
-            <p className='text-sm font-semibold text-gray-700'>Model Cost Table</p>
-            <p className='text-[11px] text-gray-400 mt-0.5'>USD per 1M tokens</p>
-          </div>
-          <CostTable models={models} selected={selectedModel} onChange={handleModelChange} />
-        </aside>
       </div>
     </div>
   )

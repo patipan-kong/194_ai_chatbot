@@ -14,6 +14,7 @@ export default function InteractionsCostActions({ filters }) {
       formData.set('modelId', filters.modelId || '')
       formData.set('question', filters.question || '')
       formData.set('isThumbUp', filters.isThumbUp || '')
+      formData.set('source', filters.source || '')
       formData.set('from', filters.from || '')
       formData.set('to', filters.to || '')
       await recalculateInteractionCosts(formData)

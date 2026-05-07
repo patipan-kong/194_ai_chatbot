@@ -8,10 +8,13 @@ import Link from 'next/link'
 
 export default async function InteractionsPage({ searchParams }) {
   const p = await searchParams
+  const hasSourceParam = Object.prototype.hasOwnProperty.call(p || {}, 'source')
+  const source = hasSourceParam ? String(p?.source || '') : 'chat'
   const qs = new URLSearchParams()
   if (p?.modelId) qs.set('modelId', p.modelId)
   if (p?.question) qs.set('question', p.question)
   if (p?.isThumbUp) qs.set('isThumbUp', p.isThumbUp)
+  qs.set('source', source)
   if (p?.from) qs.set('from', p.from)
   if (p?.to) qs.set('to', p.to)
   if (p?.sortBy) qs.set('sortBy', p.sortBy)
@@ -56,6 +59,14 @@ export default async function InteractionsPage({ searchParams }) {
           </select>
         </div>
         <div>
+          <label className='text-xs text-slate-500'>Source</label>
+          <select name='source' defaultValue={source} className='w-full rounded-lg border border-slate-300 px-3 py-2'>
+            <option value='chat'>Chat</option>
+            <option value='playground'>Prompt Playground</option>
+            <option value=''>All</option>
+          </select>
+        </div>
+        <div>
           <label className='text-xs text-slate-500'>Sort By</label>
           <select name='sortBy' defaultValue={p?.sortBy || 'createdAt'} className='w-full rounded-lg border border-slate-300 px-3 py-2'>
             <option value='createdAt'>createdAt</option>
@@ -90,6 +101,7 @@ export default async function InteractionsPage({ searchParams }) {
           modelId: p?.modelId || '',
           question: p?.question || '',
           isThumbUp: p?.isThumbUp || '',
+          source,
           from: p?.from || '',
           to: p?.to || ''
         }}
