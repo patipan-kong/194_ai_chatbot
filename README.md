@@ -16,6 +16,7 @@ Always shows welcome text:
 Responses are generated using KnowledgeBase store in Prisma with the following rules:
 
 - **Exact FAQ-first matching**: if user question exactly matches an active Knowledge Base question (normalized), API returns the KB answer directly before calling any AI provider.
+   - Normalization includes: trim, lowercase, punctuation/symbol cleanup, whitespace collapse, and Unicode NFKC normalization (full-width/half-width unification).
 
 #### Language Rule
 Chatbot replies in the same language as the user — Japanese or English.
@@ -27,8 +28,10 @@ KnowledgeBase is in Japanese; answers are translated to English when needed.
 2. Respond politely and in a friendly manner.
 3. Always respond as if talking to a real person.
 
-### AI Model Selection
-Users can switch between models in the chat UI:
+### AI Model Configuration
+AI models are configured in `api/ai-model.json` and managed from admin:
+- Admin can set the default AI model in Prompt Playground.
+- End-user chat uses backend default model automatically.
 
 | Provider | API Key |
 |---|---|
@@ -38,7 +41,7 @@ Users can switch between models in the chat UI:
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
 
-Model entries are configured in `api/ai-model.json` and returned by `GET /api/models`.
+Model entries are returned by `GET /api/models`.
 Each model can define:
 - `id` (frontend/internal ID)
 - `apiModel` (optional provider-specific real model name)
@@ -52,9 +55,6 @@ Current configured models include Gemini, OpenAI, Groq, Anthropic, and DeepSeek 
 - **Mobile-first design**: Optimized for thumb-friendly interactions
 - **Chat history**: Persisted in `localStorage` — survives page reload
 - **Session persistence**: Session ID stored in `localStorage`
-- **Model preference**: Last selected model saved in `localStorage`
-- **Cost panel (desktop)**: Right-side model cost table (USD per 1M tokens)
-- **Sortable costs**: Sort by Model / In / Out / Cache from table header
 - **Error handling**: Graceful fallbacks and user-friendly error messages
 - **Restore chat**: Previous conversation restored on page reload
 
@@ -66,7 +66,7 @@ Current configured models include Gemini, OpenAI, Groq, Anthropic, and DeepSeek 
 - **React 18** + **Vite 6**
 - **TailwindCSS 3** — utility-first styling with custom animations
 - **Mobile-first** responsive design, prevent zoom on double-tap
-- Calls `POST /api/chat` with selected model
+- Calls `POST /api/chat` without model override (backend default model is applied)
 
 ### API
 - **Fastify 5** — fast Node.js web framework
@@ -84,7 +84,7 @@ Current configured models include Gemini, OpenAI, Groq, Anthropic, and DeepSeek 
    - TTL 1 hour, refreshed early
    - Specific models can bypass cache
 - `GET /api/models` — returns the list of available models to the frontend
-- `POST /api/chat` — accepts `message` + `model`, returns `reply`
+- `POST /api/chat` — accepts `message` and optional `model` override, returns `reply`
 - Runtime prompt is built from active System Setting + active Knowledge Base entries.
 - If `{{FAQ_DATA}}` placeholder is missing in a custom template, FAQ block is automatically appended.
 
@@ -94,6 +94,7 @@ Current configured models include Gemini, OpenAI, Groq, Anthropic, and DeepSeek 
 - Admin management pages:
    - Knowledge Base
    - Interactions
+   - Prompt Playground
    - Pending Reviews
    - Model Report
    - Search Analytics
@@ -105,10 +106,18 @@ Current configured models include Gemini, OpenAI, Groq, Anthropic, and DeepSeek 
 #### Admin UX Updates
 - Flash message banner after add/update/delete actions (KB, Pending, Admin Users, System Setting, Alert Threshold Settings).
 - Pending Review default filter is `status=PENDING` when no status query is provided.
+- Interactions default source filter is `source=chat` when no source query is provided.
 - Promote to KB modal includes **Ask AI Suggestion**:
    - Model picker is restricted to models with `rating.helpfulness >= 4`
    - `ASK AI` action button
    - Optional Advanced section (hidden by default) for custom Prompt + Short/Long answer style
+
+#### Prompt Playground
+- Compare multiple models on same question and prompt template.
+- AI model table shows cost + rating with sortable columns.
+- Remembers last sort and selected models.
+- Stores run history (`question`, `promptTemplate`, `result`) and supports viewing later.
+- Allows admin to set default frontend model.
 
 #### Admin List Pagination
 - All admin list pages use pagination by default.
@@ -118,7 +127,7 @@ Current configured models include Gemini, OpenAI, Groq, Anthropic, and DeepSeek 
 
 ### Data Management
 - **`Prisma`** — KnowledgeBase, SystemData, Log, ...
-- **`localStorage`** — chat history, session ID, selected model
+- **`localStorage`** — chat history and session ID (frontend), plus playground sort/selected models (admin browser)
 - **Soft delete (`isDelete`)** — Knowledge Base and Admin Users are marked as deleted (`isDelete=true`) instead of hard-deleted.
 
 ---
@@ -149,7 +158,7 @@ Current configured models include Gemini, OpenAI, Groq, Anthropic, and DeepSeek 
     └── src/
         ├── main.jsx
         ├── index.css
-        └── App.jsx           # Chat UI with model picker
+            └── App.jsx           # End-user chat UI
 ```
 
 ---
@@ -218,8 +227,7 @@ ADMIN_API_KEY=your_admin_api_key
 ## 🌟 User Journey
 
 1. **Welcome screen** — assistant greeting shown on first load
-2. **Model selection** — choose AI model from pill buttons below the header
-3. **Cost awareness (desktop)** — review model pricing on the right panel (sortable)
-4. **Chat** — type a message, press Enter to send
-5. **History** — chat is saved and restored on reload
-6. **Reset** — trash icon in header clears chat and session
+2. **Chat** — type a message, press Enter to send
+3. **Default model routing** — backend selects model from admin-configured default
+4. **History** — chat is saved and restored on reload
+5. **Reset** — trash icon in header clears chat and session

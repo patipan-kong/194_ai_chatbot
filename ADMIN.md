@@ -58,9 +58,26 @@ Admin panel for monitoring, operations, and content management.
     - Model
     - Question text
     - Thumb up/down
+    - Source (`Chat`, `Prompt Playground`, `All`)
     - Date range
+- Default source filter is `Chat` when no source query is provided.
 - Sorting options for key columns.
 - Detail page with prompt version and user chat history.
+
+### Prompt Playground
+- Compare multiple models against the same:
+    - Question
+    - Prompt template (editable)
+- Model table includes:
+    - Cost (`In` / `Out` / `Cache`)
+    - Ratings (`Accuracy` / `Speed` / `Helpfulness`)
+    - Sortable columns with remembered last sort.
+    - Remembered selected models.
+- Prompt Playground test history:
+    - Stores `question`, `promptTemplate`, and `result` per run.
+    - Click history item to open detail later.
+    - Supports history pagination.
+- Set default AI model for end-user frontend chat from admin page.
 
 ### Pending Review Management
 - List mode or group-by-question mode.
@@ -138,6 +155,7 @@ Admin panel for monitoring, operations, and content management.
 │   │   ├── interactions/
 │   │   ├── knowledge-base/
 │   │   ├── pending/
+│   │   ├── prompt-playground/
 │   │   ├── reports/model/
 │   │   ├── reports/search/
 │   │   └── system-setting/

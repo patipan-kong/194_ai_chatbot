@@ -174,7 +174,16 @@ function buildSystemPrompt (template, rows) {
 
 function normalizeFaqKey (text) {
   if (typeof text !== 'string') return ''
-  return text.trim().replace(/\s+/g, ' ').toLowerCase()
+
+  // NFKC makes full-width/half-width forms comparable (important for Japanese input).
+  const normalized = text
+    .normalize('NFKC')
+    .toLowerCase()
+    .trim()
+    .replace(/[\p{P}\p{S}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+
+  return normalized
 }
 
 function findExactFaqAnswer (question) {
