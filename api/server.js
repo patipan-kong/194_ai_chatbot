@@ -77,7 +77,7 @@ function getClient (provider) {
 }
 
 // Gemini context caches are kept per model (TTL 1 h, refreshed 5 min before expiry).
-const GEMINI_CACHE_BYPASS_MODELS = new Set(['gemini-3-flash-lite'])
+const GEMINI_CACHE_BYPASS_MODELS = new Set(['gemini-3.1-flash-lite-preview'])
 const GEMINI_CACHE_REFRESH_MS = 55 * 60 * 1000
 const _geminiAi = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
 const _geminiCaches = new Map()
@@ -357,9 +357,11 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
     return { reply, model: modelId, interactionId }
   }
 
-  if (modelConfig.provider === 'gemini' && modelId.includes('2.5')) {
+  if (modelConfig.provider === 'gemini') {
     try {
-      const cacheEntry = await getGeminiCachedContent(apiModelId)
+      const cacheEntry = modelId.includes('2.5')
+        ? await getGeminiCachedContent(apiModelId)
+        : null
       const ai = cacheEntry?.ai || _geminiAi
       const generationConfig = cacheEntry
         ? { cachedContent: cacheEntry.cacheName, temperature: modelConfig.temperature }
@@ -384,8 +386,8 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
       const interactionId = interactionMeta?.id || null
       if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
       return { reply, model: modelId, interactionId }
-    } catch (cacheErr) {
-      app.log.warn({ cacheErr }, 'Gemini context cache unavailable, falling back')
+    } catch (geminiErr) {
+      app.log.warn({ geminiErr, modelId }, 'Gemini native request unavailable, falling back')
       _geminiCaches.delete(apiModelId)
     }
   }
@@ -496,7 +498,7 @@ async function runPromptPlaygroundTest ({ question, promptTemplate, settingId, m
           .join('\n')
         inputTokens = response.usage?.input_tokens ?? null
         outputTokens = response.usage?.output_tokens ?? null
-      } else if (modelConfig.provider === 'gemini' && modelId.includes('2.5')) {
+      } else if (modelConfig.provider === 'gemini') {
         const response = await _geminiAi.models.generateContent({
           model: apiModelId,
           config: { systemInstruction: systemPrompt, temperature: modelConfig.temperature },
