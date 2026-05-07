@@ -310,6 +310,40 @@ async function streamTextChunks (text, onToken) {
   }
 }
 
+async function generateGeminiResponse ({ apiModelId, message, systemPrompt, temperature, useCache = false }) {
+  let cacheEntry = null
+
+  if (useCache) {
+    try {
+      cacheEntry = await getGeminiCachedContent(apiModelId)
+    } catch (cacheErr) {
+      // Cache creation can fail on some deployments; continue with non-cached Gemini request.
+      cacheEntry = null
+    }
+  }
+
+  try {
+    const response = await _geminiAi.models.generateContent({
+      model: apiModelId,
+      config: cacheEntry
+        ? { cachedContent: cacheEntry.cacheName, temperature }
+        : { systemInstruction: systemPrompt, temperature },
+      contents: [{ role: 'user', parts: [{ text: message }] }]
+    })
+    return response
+  } catch (geminiErr) {
+    if (cacheEntry) {
+      _geminiCaches.delete(apiModelId)
+      return _geminiAi.models.generateContent({
+        model: apiModelId,
+        config: { systemInstruction: systemPrompt, temperature },
+        contents: [{ role: 'user', parts: [{ text: message }] }]
+      })
+    }
+    throw geminiErr
+  }
+}
+
 async function generateChatResponse ({ message, modelId, userId, modelConfig, apiModelId, onToken }) {
   const t0 = Date.now()
 
@@ -359,17 +393,12 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
 
   if (modelConfig.provider === 'gemini') {
     try {
-      const cacheEntry = modelId.includes('2.5')
-        ? await getGeminiCachedContent(apiModelId)
-        : null
-      const ai = cacheEntry?.ai || _geminiAi
-      const generationConfig = cacheEntry
-        ? { cachedContent: cacheEntry.cacheName, temperature: modelConfig.temperature }
-        : { systemInstruction: SYSTEM_PROMPT, temperature: modelConfig.temperature }
-      const response = await ai.models.generateContent({
-        model: apiModelId,
-        config: generationConfig,
-        contents: [{ role: 'user', parts: [{ text: message }] }]
+      const response = await generateGeminiResponse({
+        apiModelId,
+        message,
+        systemPrompt: SYSTEM_PROMPT,
+        temperature: modelConfig.temperature,
+        useCache: modelId.includes('2.5')
       })
       const isNoAnswer = isNoAnswerResponse(response.text)
       const reply = cleanResponse(response.text)
@@ -387,8 +416,8 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
       if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
       return { reply, model: modelId, interactionId }
     } catch (geminiErr) {
-      app.log.warn({ geminiErr, modelId }, 'Gemini native request unavailable, falling back')
-      _geminiCaches.delete(apiModelId)
+      app.log.error({ geminiErr, modelId }, 'Gemini native request failed')
+      throw geminiErr
     }
   }
 
@@ -499,10 +528,12 @@ async function runPromptPlaygroundTest ({ question, promptTemplate, settingId, m
         inputTokens = response.usage?.input_tokens ?? null
         outputTokens = response.usage?.output_tokens ?? null
       } else if (modelConfig.provider === 'gemini') {
-        const response = await _geminiAi.models.generateContent({
-          model: apiModelId,
-          config: { systemInstruction: systemPrompt, temperature: modelConfig.temperature },
-          contents: [{ role: 'user', parts: [{ text: question }] }]
+        const response = await generateGeminiResponse({
+          apiModelId,
+          message: question,
+          systemPrompt,
+          temperature: modelConfig.temperature,
+          useCache: modelId.includes('2.5')
         })
         text = response.text || ''
         inputTokens = response.usageMetadata?.promptTokenCount ?? null
