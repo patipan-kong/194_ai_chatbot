@@ -9,6 +9,7 @@ export async function createKnowledgeBase(formData) {
     category: String(formData.get('category') || ''),
     question: String(formData.get('question') || ''),
     answer: String(formData.get('answer') || ''),
+    fullAnswer: String(formData.get('fullAnswer') || formData.get('answer') || ''),
     status
   })
   revalidatePath('/knowledge-base')
@@ -37,6 +38,7 @@ export async function updateKnowledgeBase(formData) {
     category: String(formData.get('category') || ''),
     question: String(formData.get('question') || ''),
     answer: String(formData.get('answer') || ''),
+    fullAnswer: String(formData.get('fullAnswer') || formData.get('answer') || ''),
     status
   })
   revalidatePath('/knowledge-base')

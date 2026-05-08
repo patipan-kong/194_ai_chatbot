@@ -50,6 +50,7 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
     if (defaultModel && modelOptions.some(item => item.modelId === defaultModel)) return [defaultModel]
     return [modelOptions[0].modelId]
   })
+  const [audience, setAudience] = useState('guest')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [results, setResults] = useState([])
@@ -220,7 +221,8 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
           settingId: Number(settingId) || null,
           promptTemplate,
           question: safeQuestion,
-          models: selectedModels
+          models: selectedModels,
+          audience
         })
       })
       const data = await res.json()
@@ -244,7 +246,7 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
   return (
     <div className='space-y-4'>
       <form onSubmit={onSubmit} className='card space-y-4'>
-        <div className='grid grid-cols-1 gap-3 md:grid-cols-2'>
+        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
           <div>
             <label className='text-xs text-slate-500'>Prompt Version</label>
             <select value={settingId} onChange={onSettingChange} className='w-full rounded-lg border border-slate-300 px-3 py-2'>
@@ -263,6 +265,27 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
               className='w-full rounded-lg border border-slate-300 px-3 py-2'
               placeholder='Ask a test question'
             />
+          </div>
+          <div>
+            <label className='text-xs text-slate-500'>Test as</label>
+            <div className='flex gap-2 mt-1'>
+              {['guest', 'member'].map(opt => (
+                <button
+                  key={opt}
+                  type='button'
+                  onClick={() => setAudience(opt)}
+                  className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+                    audience === opt
+                      ? opt === 'member'
+                        ? 'bg-indigo-600 border-indigo-600 text-white'
+                        : 'bg-slate-700 border-slate-700 text-white'
+                      : 'border-slate-300 text-slate-600 hover:border-slate-400'
+                  }`}
+                >
+                  {opt === 'guest' ? 'Guest (Public)' : 'Member (194)'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -356,7 +379,7 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                 {results.map(row => (
                   <tr key={`${row.modelId}-${row.interactionId || 'x'}`} className='border-b border-slate-100 align-top'>
                     <td className='py-2 pr-3 font-medium'>{row.modelId}</td>
-                    <td className='py-2 pr-3'>{typeof row.latencyMs === 'number' ? `${row.latencyMs} ms` : '-'}</td>
+                    <td className='py-2 pr-3'>{typeof row.latencyMs === 'number' ? `${(row.latencyMs / 1000).toFixed(2)} s` : '-'}</td>
                     <td className='py-2 pr-3'>{typeof row.cost === 'number' ? `$${row.cost.toFixed(6)}` : '-'}</td>
                     <td className='py-2 pr-3 whitespace-pre-wrap'>
                       {row.error ? <span className='text-red-600'>{row.error}</span> : (row.answer || '-')}
@@ -444,7 +467,7 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                       {normalizeResults(selectedHistory.result).map((row, idx) => (
                         <tr key={`${selectedHistory.id}-${idx}`} className='border-b border-slate-100 align-top'>
                           <td className='py-1 pr-2'>{row?.modelId || '-'}</td>
-                          <td className='py-1 pr-2'>{typeof row?.latencyMs === 'number' ? `${row.latencyMs} ms` : '-'}</td>
+                          <td className='py-1 pr-2'>{typeof row?.latencyMs === 'number' ? `${(row.latencyMs / 1000).toFixed(2)} s` : '-'}</td>
                           <td className='py-1 pr-2'>{typeof row?.cost === 'number' ? `$${row.cost.toFixed(6)}` : '-'}</td>
                           <td className='py-1 pr-2 whitespace-pre-wrap'>{row?.error ? <span className='text-red-600'>{row.error}</span> : (row?.answer || '-')}</td>
                         </tr>

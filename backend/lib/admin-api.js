@@ -9,13 +9,31 @@ async function adminHeaders() {
   return headers
 }
 
+async function extractApiErrorMessage(res, fallback) {
+  try {
+    const data = await res.json()
+    const detail = String(data?.error || data?.detail || '').trim()
+    if (detail) return detail
+  } catch {}
+
+  try {
+    const text = (await res.text()).trim()
+    if (text) return text
+  } catch {}
+
+  return fallback
+}
+
 export async function apiGet(path, searchParams = '') {
   const base = process.env.API_BASE_URL || 'http://localhost:3001'
   const res = await fetch(`${base}${path}${searchParams}`, {
     headers: await adminHeaders(),
     cache: 'no-store'
   })
-  if (!res.ok) throw new Error(`GET ${path} failed`)
+  if (!res.ok) {
+    const message = await extractApiErrorMessage(res, `GET ${path} failed`)
+    throw new Error(message)
+  }
   return res.json()
 }
 
@@ -26,6 +44,9 @@ export async function apiWrite(path, method, body) {
     headers: await adminHeaders(),
     body: JSON.stringify(body ?? {})
   })
-  if (!res.ok) throw new Error(`${method} ${path} failed`)
+  if (!res.ok) {
+    const message = await extractApiErrorMessage(res, `${method} ${path} failed`)
+    throw new Error(message)
+  }
   return res.json()
 }

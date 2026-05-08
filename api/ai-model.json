@@ -37,6 +37,24 @@
   },
   "models": [
     {
+      "id": "gemini-3-flash-preview",
+      "label": "Gemini 3 Flash Preview",
+      "provider": "gemini",
+      "temperature": 0.7,
+      "cost": {
+        "token_1m": {
+          "input": 0.5,
+          "output": 3.0,
+          "caching": 0.05
+        }
+      },
+      "rating": {
+        "accuracy": 4,
+        "speed": 2,
+        "helpfulness": 3
+      }
+    },
+    {
       "id": "gemini-2.5-flash",
       "label": "Gemini 2.5 Flash",
       "provider": "gemini",
@@ -50,7 +68,7 @@
       },
       "rating": {
         "accuracy": 4,
-        "speed": 2,
+        "speed": 3,
         "helpfulness": 5
       }
     },
@@ -86,8 +104,26 @@
       },
       "rating": {
         "accuracy": 3,
-        "speed": 4,
+        "speed": 3,
         "helpfulness": 3
+      }
+    },
+    {
+      "id": "gpt-5",
+      "label": "GPT-5",
+      "provider": "openai",
+      "temperature": 1,
+      "cost": {
+        "token_1m": {
+          "input": 1.25,
+          "output": 10,
+          "caching": 0.125
+        }
+      },
+      "rating": {
+        "accuracy": 5,
+        "speed": 1,
+        "helpfulness": 4
       }
     },
     {
@@ -122,8 +158,8 @@
       },
       "rating": {
         "accuracy": 3,
-        "speed": 1,
-        "helpfulness": 3
+        "speed": 3,
+        "helpfulness": 2
       }
     },
     {
@@ -141,7 +177,7 @@
       "rating": {
         "accuracy": 3,
         "speed": 1,
-        "helpfulness": 3
+        "helpfulness": 2
       }
     },
     {
@@ -155,6 +191,25 @@
           "input": 0.075,
           "output": 0.3,
           "caching": 0.0375
+        }
+      },
+      "rating": {
+        "accuracy": 3,
+        "speed": 5,
+        "helpfulness": 2
+      }
+    },
+    {
+      "id": "gpt-oss-120b",
+      "apiModel": "openai/gpt-oss-120b",
+      "label": "GPT OSS 120B",
+      "provider": "groq",
+      "temperature": 0.7,
+      "cost": {
+        "token_1m": {
+          "input": 0.15,
+          "output": 0.6,
+          "caching": 0.075
         }
       },
       "rating": {
@@ -183,21 +238,20 @@
       }
     },
     {
-      "id": "llama-3.1-8b-instant",
-      "label": "Llama 3.1 8B",
+      "id": "llama-3.3-70b-versatile",
+      "label": "Llama 3.3 70B",
       "provider": "groq",
       "temperature": 0.7,
       "cost": {
         "token_1m": {
-          "input": 0.05,
-          "output": 0.08,
-          "caching": 0.01
+          "input": 0.59,
+          "output": 0.79
         }
       },
       "rating": {
-        "accuracy": 2,
-        "speed": 5,
-        "helpfulness": 1
+        "accuracy": 5,
+        "speed": 4,
+        "helpfulness": 5
       }
     },
     {
@@ -209,14 +263,13 @@
       "cost": {
         "token_1m": {
           "input": 0.29,
-          "output": 0.39,
-          "caching": 0.05
+          "output": 0.59
         }
       },
       "rating": {
         "accuracy": 3,
         "speed": 4,
-        "helpfulness": 3
+        "helpfulness": 2
       }
     },
     {
@@ -247,13 +300,31 @@
         "token_1m": {
           "input": 0.14,
           "output": 0.28,
-          "caching": 0.014
+          "caching": 0.0028
         }
       },
       "rating": {
         "accuracy": 4,
         "speed": 2,
         "helpfulness": 4
+      }
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "label": "DeepSeek-V4-Pro",
+      "provider": "deepseek",
+      "temperature": 0.7,
+      "cost": {
+        "token_1m": {
+          "input": 0.435,
+          "output": 0.87,
+          "caching": 0.0036
+        }
+      },
+      "rating": {
+        "accuracy": 4,
+        "speed": 2,
+        "helpfulness": 3
       }
     }
   ]

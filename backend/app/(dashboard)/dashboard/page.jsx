@@ -128,7 +128,7 @@ export default async function DashboardPage({ searchParams }) {
           { key: 'label', header: makeSortHeader('Model', 'label') },
           { key: 'thumbUpRate', header: makeSortHeader('Thumb Up Rate', 'thumbUpRate'), render: v => `${((v || 0) * 100).toFixed(1)}%` },
           { key: 'avgCost', header: makeSortHeader('Avg Cost', 'avgCost'), render: v => `$${(v || 0).toFixed(5)}` },
-          { key: 'avgLatency', header: makeSortHeader('Avg Latency (ms)', 'avgLatency'), render: v => Math.round(v || 0) },
+          { key: 'avgLatency', header: makeSortHeader('Avg Latency (s)', 'avgLatency'), render: v => ((v || 0) / 1000).toFixed(2) },
           { key: 'unknownAnswerRate', header: makeSortHeader('Unknown Rate', 'unknownAnswerRate'), render: v => `${((v || 0) * 100).toFixed(1)}%` }
         ]}
         rows={pagedRows}

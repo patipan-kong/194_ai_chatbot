@@ -78,6 +78,67 @@ function kbStatusTransitionAction(currentStatus, nextStatus) {
   return `KB_STATUS_${currentStatus}_TO_${nextStatus}`
 }
 
+function normalizeCategoryName(value, fallback = '') {
+  const name = String(value || '').trim()
+  return name || fallback
+}
+
+function normalizeCategoryAudience(value) {
+  const normalized = String(value || '').toLowerCase()
+  if (normalized === 'member') return 'member'
+  if (normalized === 'public') return 'public'
+  return 'all'
+}
+
+function buildInteractionSourceWhere(sourceRaw) {
+  const source = String(sourceRaw || '').toLowerCase()
+  if (!source) return {}
+
+  if (source === 'playground') {
+    return { userId: { startsWith: 'playground:' } }
+  }
+
+  if (source === 'chat') {
+    return { NOT: { userId: { startsWith: 'playground:' } } }
+  }
+
+  if (source === 'chat-member') {
+    return {
+      AND: [
+        { NOT: { userId: { startsWith: 'playground:' } } },
+        { userId: { startsWith: '194964:' } }
+      ]
+    }
+  }
+
+  if (source === 'chat-public') {
+    return {
+      AND: [
+        { NOT: { userId: { startsWith: 'playground:' } } },
+        { NOT: { userId: { startsWith: '194964:' } } }
+      ]
+    }
+  }
+
+  return {}
+}
+
+function serializeKnowledgeBase(item) {
+  if (!item) return item
+  const categoryName = item?.categoryRef?.name || item?.category || ''
+  const categoryId = item?.categoryRef?.id || item?.categoryId || null
+  const categoryFor194Member = typeof item?.categoryRef?.for194Member === 'boolean'
+    ? item.categoryRef.for194Member
+    : null
+
+  return {
+    ...item,
+    category: categoryName,
+    categoryId,
+    categoryFor194Member
+  }
+}
+
 function buildDashboardAlerts({ dailyCost, monthlyCost, pendingReviewCount, thresholds }) {
   const alerts = []
 
@@ -131,6 +192,16 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     } catch (err) {
       app.log.warn({ err }, 'audit write failed')
     }
+  }
+
+  async function ensureCategoryByName(name, for194Member = false) {
+    const normalized = normalizeCategoryName(name)
+    if (!normalized) return null
+    return prisma.category.upsert({
+      where: { name: normalized },
+      update: {},
+      create: { name: normalized, for194Member: Boolean(for194Member) }
+    })
   }
 
   app.get('/api/admin/dashboard', { preHandler: adminGuard }, async () => {
@@ -287,23 +358,73 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
   app.get('/api/admin/knowledge-base', { preHandler: adminGuard }, async request => {
     const query = request.query || {}
     const category = query.category
+    const categoryAudience = normalizeCategoryAudience(query.categoryAudience)
     const status = normalizeKbStatus(query.status)
     const deleted = normalizeDeletedFilter(query.deleted)
     const isDeleteFilter = deleted === 'all' ? undefined : deleted === 'deleted'
     const where = {
       ...(isDeleteFilter === undefined ? {} : { isDelete: isDeleteFilter }),
-      ...(category ? { category } : {}),
+      ...(category ? { categoryRef: { name: category } } : {}),
+      ...(categoryAudience === 'member' ? { categoryRef: { ...(category ? { name: category } : {}), for194Member: true } } : {}),
+      ...(categoryAudience === 'public' ? { categoryRef: { ...(category ? { name: category } : {}), for194Member: false } } : {}),
       ...(status ? { status } : {})
     }
     const pagination = normalizePageQuery(query, { page: 1, pageSize: 20, maxPageSize: 500 })
     const [items, total] = await Promise.all([
       prisma.knowledgeBase.findMany({
         where,
+        include: { categoryRef: true },
         orderBy: { updatedAt: 'desc' },
         skip: pagination.skip,
         take: pagination.pageSize
       }),
       prisma.knowledgeBase.count({ where })
+    ])
+
+    return {
+      items: items.map(serializeKnowledgeBase),
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pagination.pageSize))
+    }
+  })
+
+  app.get('/api/admin/knowledge-base/categories', { preHandler: adminGuard }, async () => {
+    const rows = await prisma.category.findMany({
+      orderBy: { name: 'asc' }
+    })
+    return {
+      items: rows.map(r => r.name),
+      categories: rows
+    }
+  })
+
+  app.get('/api/admin/categories', { preHandler: adminGuard }, async request => {
+    const query = request.query || {}
+    const name = String(query.name || '').trim()
+    const audience = normalizeCategoryAudience(query.audience)
+    const pagination = normalizePageQuery(query, { page: 1, pageSize: 20, maxPageSize: 500 })
+
+    const where = {
+      ...(name ? { name: { contains: name, mode: 'insensitive' } } : {}),
+      ...(audience === 'member' ? { for194Member: true } : {}),
+      ...(audience === 'public' ? { for194Member: false } : {})
+    }
+
+    const [items, total] = await Promise.all([
+      prisma.category.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        skip: pagination.skip,
+        take: pagination.pageSize,
+        include: {
+          _count: {
+            select: { knowledgeBase: true }
+          }
+        }
+      }),
+      prisma.category.count({ where })
     ])
 
     return {
@@ -315,33 +436,125 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     }
   })
 
-  app.get('/api/admin/knowledge-base/categories', { preHandler: adminGuard }, async () => {
-    const rows = await prisma.knowledgeBase.findMany({
-      where: { isDelete: false },
-      select: { category: true },
-      distinct: ['category'],
-      orderBy: { category: 'asc' }
+  app.post('/api/admin/categories', { preHandler: adminGuard }, async (request, reply) => {
+    const body = request.body || {}
+    const changedBy = String(request.headers['x-admin-user'] || 'admin')
+    const name = normalizeCategoryName(body.name)
+    if (!name) return reply.code(400).send({ error: 'name is required' })
+
+    const created = await prisma.category.create({
+      data: {
+        name,
+        for194Member: Boolean(body.for194Member)
+      }
     })
-    return { items: rows.map(r => r.category) }
+
+    await writeAudit({
+      action: 'CREATE_CATEGORY',
+      entityType: 'Category',
+      entityId: created.id,
+      newValue: created,
+      changedBy,
+      request
+    })
+    await refreshRuntimeTextConfig(true)
+    return { item: created }
+  })
+
+  app.patch('/api/admin/categories/:id', { preHandler: adminGuard }, async (request, reply) => {
+    const id = toInt(request.params.id)
+    const body = request.body || {}
+    const changedBy = String(request.headers['x-admin-user'] || 'admin')
+    const oldValue = await prisma.category.findUnique({ where: { id } })
+    if (!oldValue) return reply.code(404).send({ error: 'Not found' })
+
+    const name = body.name !== undefined
+      ? normalizeCategoryName(body.name, oldValue.name)
+      : oldValue.name
+    if (!name) return reply.code(400).send({ error: 'name is required' })
+
+    const updated = await prisma.category.update({
+      where: { id },
+      data: {
+        name,
+        ...(body.for194Member !== undefined ? { for194Member: Boolean(body.for194Member) } : {})
+      }
+    })
+
+    await writeAudit({
+      action: 'UPDATE_CATEGORY',
+      entityType: 'Category',
+      entityId: id,
+      oldValue,
+      newValue: updated,
+      changedBy,
+      request
+    })
+    await refreshRuntimeTextConfig(true)
+    return { item: updated }
+  })
+
+  app.delete('/api/admin/categories/:id', { preHandler: adminGuard }, async (request, reply) => {
+    const id = toInt(request.params.id)
+    const changedBy = String(request.headers['x-admin-user'] || 'admin')
+
+    const oldValue = await prisma.category.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: { knowledgeBase: true }
+        }
+      }
+    })
+    if (!oldValue) return { ok: true }
+
+    if ((oldValue?._count?.knowledgeBase || 0) > 0) {
+      return reply.code(400).send({ error: 'Cannot delete category that is used by knowledge base rows' })
+    }
+
+    await prisma.category.delete({ where: { id } })
+
+    await writeAudit({
+      action: 'DELETE_CATEGORY',
+      entityType: 'Category',
+      entityId: id,
+      oldValue,
+      newValue: { deleted: true },
+      changedBy,
+      request
+    })
+    await refreshRuntimeTextConfig(true)
+    return { ok: true }
   })
 
   app.post('/api/admin/knowledge-base', { preHandler: adminGuard }, async request => {
     const body = request.body || {}
     const createdBy = request.headers['x-admin-user'] || 'admin'
     const status = normalizeKbStatus(body.status, 'DRAFT')
+    const categoryName = normalizeCategoryName(body.category)
+    if (!categoryName) {
+      return { error: 'category is required' }
+    }
     const created = await prisma.knowledgeBase.create({
       data: {
-        category: body.category,
+        categoryRef: {
+          connectOrCreate: {
+            where: { name: categoryName },
+            create: { name: categoryName }
+          }
+        },
         question: body.question,
         answer: body.answer,
+        fullAnswer: String(body.fullAnswer || body.answer || ''),
         status,
         isActive: status === 'PUBLISHED'
-      }
+      },
+      include: { categoryRef: true }
     })
     await writeAudit({ action: 'CREATE_KB', entityType: 'KnowledgeBase', entityId: created.id, newValue: created, changedBy: String(createdBy), request })
     await writeAudit({ action: `CREATE_KB_${status}`, entityType: 'KnowledgeBase', entityId: created.id, newValue: { status }, changedBy: String(createdBy), request })
     await refreshRuntimeTextConfig(true)
-    return { item: created }
+    return { item: serializeKnowledgeBase(created) }
   })
 
   app.post('/api/admin/knowledge-base/import', { preHandler: adminGuard }, async request => {
@@ -352,38 +565,70 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
 
     const normalized = items
       .map(item => ({
-        category: String(item.category || '').trim(),
+        category: normalizeCategoryName(item.category),
         question: String(item.question || '').trim(),
         answer: String(item.answer || '').trim(),
+        fullAnswer: String(item.fullAnswer || item.answer || '').trim(),
         status: normalizeKbStatus(item.status, 'PUBLISHED'),
         isActive: normalizeKbStatus(item.status, 'PUBLISHED') === 'PUBLISHED'
       }))
-      .filter(item => item.category && item.question && item.answer)
+      .filter(item => item.category && item.question && item.answer && item.fullAnswer)
 
     if (!normalized.length) return { imported: 0, skipped: items.length }
 
-    const result = await prisma.knowledgeBase.createMany({
-      data: normalized,
-      skipDuplicates: true
-    })
+    let importedCount = 0
+    const categoryIdByName = new Map()
+    for (const item of normalized) {
+      let categoryId = categoryIdByName.get(item.category)
+      if (!categoryId) {
+        const categoryRow = await ensureCategoryByName(item.category)
+        categoryId = categoryRow?.id
+        if (!categoryId) continue
+        categoryIdByName.set(item.category, categoryId)
+      }
+
+      await prisma.knowledgeBase.upsert({
+        where: {
+          categoryId_question: {
+            categoryId,
+            question: item.question
+          }
+        },
+        update: {
+          answer: item.answer,
+          fullAnswer: item.fullAnswer,
+          status: item.status,
+          isActive: item.isActive
+        },
+        create: {
+          categoryId,
+          question: item.question,
+          answer: item.answer,
+          fullAnswer: item.fullAnswer,
+          status: item.status,
+          isActive: item.isActive
+        }
+      })
+      importedCount += 1
+    }
 
     await writeAudit({
       action: 'IMPORT_KB',
       entityType: 'KnowledgeBase',
       entityId: 0,
-      newValue: { requested: items.length, normalized: normalized.length, imported: result.count },
+      newValue: { requested: items.length, normalized: normalized.length, imported: importedCount },
       changedBy,
       request
     })
     await refreshRuntimeTextConfig(true)
-    return { imported: result.count, skipped: items.length - result.count }
+    return { imported: importedCount, skipped: items.length - importedCount }
   })
 
   app.patch('/api/admin/knowledge-base/:id', { preHandler: adminGuard }, async (request, reply) => {
     const id = toInt(request.params.id)
     const body = request.body || {}
     const changedBy = String(request.headers['x-admin-user'] || 'admin')
-    const oldValue = await prisma.knowledgeBase.findFirst({ where: { id, isDelete: false } })
+    const oldValue = await prisma.knowledgeBase.findFirst({ where: { id, isDelete: false }, include: { categoryRef: true } })
     if (!oldValue) return { error: 'Not found' }
 
     const statusFromBody = normalizeKbStatus(body.status)
@@ -395,14 +640,31 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       })
     }
 
+    const categoryName = body.category !== undefined
+      ? normalizeCategoryName(body.category, oldValue?.categoryRef?.name || '')
+      : null
+    if (body.category !== undefined && !categoryName) {
+      return reply.code(400).send({ error: 'category is required' })
+    }
     const updated = await prisma.knowledgeBase.update({
       where: { id },
       data: {
-        ...(body.category !== undefined ? { category: body.category } : {}),
+        ...(body.category !== undefined
+          ? {
+              categoryRef: {
+                connectOrCreate: {
+                  where: { name: categoryName },
+                  create: { name: categoryName }
+                }
+              }
+            }
+          : {}),
         ...(body.question !== undefined ? { question: body.question } : {}),
         ...(body.answer !== undefined ? { answer: body.answer } : {}),
+        ...(body.fullAnswer !== undefined ? { fullAnswer: String(body.fullAnswer || '') } : {}),
         ...(nextStatus ? { status: nextStatus, isActive: nextStatus === 'PUBLISHED' } : {})
-      }
+      },
+      include: { categoryRef: true }
     })
     await writeAudit({ action: 'UPDATE_KB', entityType: 'KnowledgeBase', entityId: id, oldValue, newValue: updated, changedBy, request })
     const transitionAction = kbStatusTransitionAction(oldValue.status, updated.status)
@@ -418,13 +680,13 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       })
     }
     await refreshRuntimeTextConfig(true)
-    return { item: updated }
+    return { item: serializeKnowledgeBase(updated) }
   })
 
   app.delete('/api/admin/knowledge-base/:id', { preHandler: adminGuard }, async request => {
     const id = toInt(request.params.id)
     const changedBy = String(request.headers['x-admin-user'] || 'admin')
-    const oldValue = await prisma.knowledgeBase.findFirst({ where: { id, isDelete: false } })
+    const oldValue = await prisma.knowledgeBase.findFirst({ where: { id, isDelete: false }, include: { categoryRef: true } })
     if (!oldValue) return { ok: true }
 
     const updated = await prisma.knowledgeBase.update({
@@ -439,7 +701,7 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
   app.post('/api/admin/knowledge-base/:id/restore', { preHandler: adminGuard }, async request => {
     const id = toInt(request.params.id)
     const changedBy = String(request.headers['x-admin-user'] || 'admin')
-    const oldValue = await prisma.knowledgeBase.findFirst({ where: { id, isDelete: true } })
+    const oldValue = await prisma.knowledgeBase.findFirst({ where: { id, isDelete: true }, include: { categoryRef: true } })
     if (!oldValue) return { error: 'Not found' }
 
     const updated = await prisma.knowledgeBase.update({
@@ -460,6 +722,7 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     const question = String(body.question || '').trim()
     const promptTemplate = String(body.promptTemplate || '')
     const settingId = toInt(body.settingId, 0) || null
+    const audience = body.audience === 'member' ? 'member' : 'guest'
     const changedBy = String(request.headers['x-admin-user'] || 'admin')
     const models = Array.isArray(body.models)
       ? body.models.map(item => String(item || '').trim()).filter(Boolean)
@@ -477,7 +740,8 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       promptTemplate,
       settingId,
       modelIds: models,
-      changedBy
+      changedBy,
+      audience
     })
 
     const items = Array.isArray(compareResult)
@@ -559,8 +823,7 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       createdAt: { gte: from, lte: to },
       ...(query.modelId ? { modelId: query.modelId } : {}),
       ...(query.question ? { userQuestion: { contains: query.question, mode: 'insensitive' } } : {}),
-      ...(query.source === 'playground' ? { userId: { startsWith: 'playground:' } } : {}),
-      ...(query.source === 'chat' ? { NOT: { userId: { startsWith: 'playground:' } } } : {}),
+      ...buildInteractionSourceWhere(query.source),
       ...(query.isThumbUp === 'true' ? { isThumbUp: true } : {}),
       ...(query.isThumbUp === 'false' ? { isThumbUp: false } : {})
     }
@@ -677,8 +940,7 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       createdAt: { gte: from, lte: to },
       ...(body.modelId ? { modelId: String(body.modelId) } : {}),
       ...(body.question ? { userQuestion: { contains: String(body.question), mode: 'insensitive' } } : {}),
-      ...(body.source === 'playground' ? { userId: { startsWith: 'playground:' } } : {}),
-      ...(body.source === 'chat' ? { NOT: { userId: { startsWith: 'playground:' } } } : {}),
+      ...buildInteractionSourceWhere(body.source),
       ...(body.isThumbUp === 'true' ? { isThumbUp: true } : {}),
       ...(body.isThumbUp === 'false' ? { isThumbUp: false } : {})
     }
@@ -816,7 +1078,8 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     const draft = {
       category: 'General',
       question: item.question,
-      answer: item.aiResponse || 'Please update this answer with verified information before publishing.'
+      answer: item.aiResponse || 'Please update this answer with verified information before publishing.',
+      fullAnswer: item.aiResponse || 'Please update this answer with verified information before publishing.'
     }
     return { draft }
   })
@@ -830,12 +1093,19 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
 
     const created = await prisma.knowledgeBase.create({
       data: {
-        category: body.category || 'General',
+        categoryRef: {
+          connectOrCreate: {
+            where: { name: normalizeCategoryName(body.category, 'General') },
+            create: { name: normalizeCategoryName(body.category, 'General') }
+          }
+        },
         question: body.question || item.question,
         answer: body.answer || item.aiResponse || '',
+        fullAnswer: body.fullAnswer || body.answer || item.aiResponse || '',
         status: 'REVIEW',
         isActive: false
-      }
+      },
+      include: { categoryRef: true }
     })
 
     const updatedPending = await prisma.pendingReview.update({

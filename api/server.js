@@ -59,11 +59,15 @@ const SYSTEM_CREATED_BY = 'system'
 const DEFAULT_UNKNOWN_ANSWER_CLEAN_TEXT = '申し訳ございませんが、この情報についてはLINE（@194964）を通じて弊社スタッフに直接お問い合わせいただくことをお勧めします。'+"We apologize, but we recommend that you contact our staff directly via LINE (@194964) regarding this information."
 
 // System prompt/runtime text cache (refreshes from DB periodically)
-let SYSTEM_PROMPT = null
 let UNKNOWN_ANSWER_CLEAN_TEXT = DEFAULT_UNKNOWN_ANSWER_CLEAN_TEXT
 let ACTIVE_SYSTEM_SETTING_ID = 1
 let _settingsExpiresAt = 0
-let FAQ_EXACT_MAP = new Map()
+const RUNTIME_AUDIENCE_MEMBER = 'member'
+const RUNTIME_AUDIENCE_PUBLIC = 'public'
+let RUNTIME_FAQ_CONFIG = {
+  [RUNTIME_AUDIENCE_MEMBER]: { systemPrompt: null, exactMap: new Map() },
+  [RUNTIME_AUDIENCE_PUBLIC]: { systemPrompt: null, exactMap: new Map() }
+}
 
 // Cached OpenAI-compatible clients per provider
 const _clients = new Map()
@@ -148,7 +152,7 @@ function setDefaultModel (modelId) {
   return DEFAULT_MODEL
 }
 
-async function getGeminiCachedContent (modelId) {
+async function getGeminiCachedContent (modelId, systemPrompt) {
   if (GEMINI_CACHE_BYPASS_MODELS.has(modelId)) return null
 
   const now = Date.now()
@@ -157,7 +161,7 @@ async function getGeminiCachedContent (modelId) {
 
   const cache = await _geminiAi.caches.create({
     model: modelId,
-    config: { systemInstruction: SYSTEM_PROMPT, ttl: '3600s' }
+    config: { systemInstruction: systemPrompt, ttl: '3600s' }
   })
 
   const cacheEntry = {
@@ -171,7 +175,10 @@ async function getGeminiCachedContent (modelId) {
 
 function buildSystemPrompt (template, rows) {
   const faqText = rows
-    .map(item => `#${item.category}\nQ:${item.question}\nA:${item.answer}`)
+    .map(item => {
+      const categoryName = item?.categoryRef?.name || item?.category || 'General'
+      return `#${categoryName}\nQ:${item.question}\nA:${item.answer}`
+    })
     .join('\n')
   console.log(`Building system prompt with ${rows.length} active FAQ items`)
   const safeTemplate = typeof template === 'string' && template.trim()
@@ -200,10 +207,20 @@ function normalizeFaqKey (text) {
   return normalized
 }
 
-function findExactFaqAnswer (question) {
+function findExactFaqAnswer (question, exactMap) {
   const key = normalizeFaqKey(question)
   if (!key) return null
-  return FAQ_EXACT_MAP.get(key) || null
+  return exactMap?.get(key) || null
+}
+
+function is194MemberUser (userId) {
+  return String(userId || '').startsWith('194964:')
+}
+
+function getRuntimeFaqConfigForUser (userId) {
+  return is194MemberUser(userId)
+    ? RUNTIME_FAQ_CONFIG[RUNTIME_AUDIENCE_MEMBER]
+    : RUNTIME_FAQ_CONFIG[RUNTIME_AUDIENCE_PUBLIC]
 }
 
 async function getOrCreateActiveSystemSetting () {
@@ -226,29 +243,60 @@ async function getOrCreateActiveSystemSetting () {
 
 async function refreshRuntimeTextConfig (force = false) {
   const now = Date.now()
-  if (!force && SYSTEM_PROMPT && now < _settingsExpiresAt) return
+  if (!force && RUNTIME_FAQ_CONFIG[RUNTIME_AUDIENCE_PUBLIC]?.systemPrompt && now < _settingsExpiresAt) return
 
-  const [setting, rows] = await Promise.all([
+  const [setting, publicRows, memberRows] = await Promise.all([
     getOrCreateActiveSystemSetting(),
     prisma.knowledgeBase.findMany({
-      where: { status: 'PUBLISHED', isDelete: false },
+      where: {
+        status: 'PUBLISHED',
+        isDelete: false,
+        categoryRef: { for194Member: false }
+      },
+      include: { categoryRef: true },
+      orderBy: { updatedAt: 'desc' }
+    }),
+    prisma.knowledgeBase.findMany({
+      where: {
+        status: 'PUBLISHED',
+        isDelete: false,
+        categoryRef: { for194Member: true }
+      },
+      include: { categoryRef: true },
       orderBy: { updatedAt: 'desc' }
     })
   ])
 
-  const nextSystemPrompt = buildSystemPrompt(setting.systemPromptTemplate, rows)
-  if (SYSTEM_PROMPT && SYSTEM_PROMPT !== nextSystemPrompt) {
+  const nextPublicSystemPrompt = buildSystemPrompt(setting.systemPromptTemplate, publicRows)
+  const nextMemberSystemPrompt = buildSystemPrompt(setting.systemPromptTemplate, memberRows)
+  const prevPublicSystemPrompt = RUNTIME_FAQ_CONFIG[RUNTIME_AUDIENCE_PUBLIC]?.systemPrompt
+  const prevMemberSystemPrompt = RUNTIME_FAQ_CONFIG[RUNTIME_AUDIENCE_MEMBER]?.systemPrompt
+  if ((prevPublicSystemPrompt && prevPublicSystemPrompt !== nextPublicSystemPrompt) ||
+      (prevMemberSystemPrompt && prevMemberSystemPrompt !== nextMemberSystemPrompt)) {
     _geminiCaches.clear()
   }
 
-  SYSTEM_PROMPT = nextSystemPrompt
+  RUNTIME_FAQ_CONFIG = {
+    [RUNTIME_AUDIENCE_PUBLIC]: {
+      systemPrompt: nextPublicSystemPrompt,
+      exactMap: new Map(
+        publicRows
+          .map(item => [normalizeFaqKey(item.question), item.fullAnswer || item.answer])
+          .filter(([key, answer]) => key && typeof answer === 'string' && answer.trim())
+      )
+    },
+    [RUNTIME_AUDIENCE_MEMBER]: {
+      systemPrompt: nextMemberSystemPrompt,
+      exactMap: new Map(
+        memberRows
+          .map(item => [normalizeFaqKey(item.question), item.fullAnswer || item.answer])
+          .filter(([key, answer]) => key && typeof answer === 'string' && answer.trim())
+      )
+    }
+  }
+
   UNKNOWN_ANSWER_CLEAN_TEXT = setting.unknownAnswerCleanText
   ACTIVE_SYSTEM_SETTING_ID = setting.id
-  FAQ_EXACT_MAP = new Map(
-    rows
-      .map(item => [normalizeFaqKey(item.question), item.answer])
-      .filter(([key, answer]) => key && typeof answer === 'string' && answer.trim())
-  )
   _settingsExpiresAt = now + SETTINGS_REFRESH_MS
 }
 
@@ -329,7 +377,7 @@ async function generateGeminiResponse ({ apiModelId, message, systemPrompt, temp
 
   if (useCache) {
     try {
-      cacheEntry = await getGeminiCachedContent(apiModelId)
+      cacheEntry = await getGeminiCachedContent(apiModelId, systemPrompt)
     } catch (cacheErr) {
       // Cache creation can fail on some deployments; continue with non-cached Gemini request.
       cacheEntry = null
@@ -360,8 +408,11 @@ async function generateGeminiResponse ({ apiModelId, message, systemPrompt, temp
 
 async function generateChatResponse ({ message, modelId, userId, modelConfig, apiModelId, onToken }) {
   const t0 = Date.now()
+  const runtimeFaqConfig = getRuntimeFaqConfigForUser(userId)
+  const systemPrompt = runtimeFaqConfig?.systemPrompt || DEFAULT_SYSTEM_PROMPT_TEMPLATE
+  const exactMap = runtimeFaqConfig?.exactMap || new Map()
 
-  const exactFaqAnswer = findExactFaqAnswer(message)
+  const exactFaqAnswer = findExactFaqAnswer(message, exactMap)
   if (exactFaqAnswer) {
     const reply = cleanResponse(exactFaqAnswer)
     if (onToken) await streamTextChunks(reply, onToken)
@@ -379,7 +430,7 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
   if (modelConfig.provider === 'anthropic') {
     const response = await _anthropicClient.messages.create({
       model: apiModelId,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       temperature: modelConfig.temperature,
       max_tokens: 1024,
       messages: [{ role: 'user', content: message }]
@@ -410,9 +461,9 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
       const response = await generateGeminiResponse({
         apiModelId,
         message,
-        systemPrompt: SYSTEM_PROMPT,
+        systemPrompt,
         temperature: modelConfig.temperature,
-        useCache: modelId.includes('2.5')
+        useCache: false
       })
       const isNoAnswer = isNoAnswerResponse(response.text)
       const reply = cleanResponse(response.text)
@@ -461,7 +512,7 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
       model: apiModelId,
       temperature: modelConfig.temperature,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: message }
       ],
       stream: true
@@ -486,7 +537,7 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
     model: apiModelId,
     temperature: modelConfig.temperature,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: message }
     ]
   })
@@ -506,14 +557,20 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
   return { reply, model: modelId, interactionId }
 }
 
-async function runPromptPlaygroundTest ({ question, promptTemplate, settingId, modelIds, changedBy }) {
+async function runPromptPlaygroundTest ({ question, promptTemplate, settingId, modelIds, changedBy, audience = 'guest' }) {
   const selectedSetting = settingId
     ? await prisma.systemSetting.findUnique({ where: { id: settingId } })
     : null
   const activeSetting = selectedSetting || await getOrCreateActiveSystemSetting()
 
+  const isMember = audience === 'member'
   const rows = await prisma.knowledgeBase.findMany({
-    where: { status: 'PUBLISHED', isDelete: false },
+    where: {
+      status: 'PUBLISHED',
+      isDelete: false,
+      categoryRef: { for194Member: isMember }
+    },
+    include: { categoryRef: true },
     orderBy: { updatedAt: 'desc' }
   })
 

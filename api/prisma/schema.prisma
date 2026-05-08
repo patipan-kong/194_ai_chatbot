@@ -15,17 +15,28 @@ datasource db {
 // 1. ตาราง Knowledge Base (FAQ)
 model KnowledgeBase {
   id        Int      @id @default(autoincrement())
-  category  String   // เช่น "登録・退会について"
+  categoryId Int
+  categoryRef Category @relation(fields: [categoryId], references: [id])
   question  String   @db.Text
   answer    String   @db.Text
+  fullAnswer String  @db.Text
   status    KBStatus @default(PUBLISHED)
   isActive  Boolean  @default(true)
   isDelete  Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([category])
-  @@unique([category, question])
+  @@index([categoryId])
+  @@unique([categoryId, question])
+}
+
+model Category {
+  id           Int             @id @default(autoincrement())
+  name         String          @unique
+  for194Member Boolean         @default(false)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  knowledgeBase KnowledgeBase[]
 }
 
 // 2. ตารางเก็บ Feedback จาก User (Thumb Up/Down)

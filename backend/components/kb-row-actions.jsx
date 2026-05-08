@@ -6,7 +6,7 @@ import { deleteKnowledgeBase, restoreKnowledgeBase, toggleKnowledgeBaseActive, u
 import ModalShell from '@/components/modal-shell'
 import ConfirmModal from '@/components/confirm-modal'
 
-export default function KbRowActions({ row }) {
+export default function KbRowActions({ row, categoryOptions = [] }) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -95,7 +95,11 @@ export default function KbRowActions({ row }) {
 
             <div>
               <label className='text-xs text-slate-500'>Category</label>
-              <input name='category' defaultValue={row.category} className='w-full rounded-md border border-slate-300 px-3 py-2 text-sm' required />
+              <select name='category' defaultValue={row.category} className='w-full rounded-md border border-slate-300 px-3 py-2 text-sm' required>
+                {categoryOptions.map(item => (
+                  <option key={item.id} value={item.name}>{item.name} ({item.for194Member ? 'Member' : 'Public'})</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className='text-xs text-slate-500'>Question</label>
@@ -104,6 +108,10 @@ export default function KbRowActions({ row }) {
             <div>
               <label className='text-xs text-slate-500'>Answer</label>
               <textarea name='answer' defaultValue={row.answer} className='w-full rounded-md border border-slate-300 px-3 py-2 text-sm' rows={4} required />
+            </div>
+            <div>
+              <label className='text-xs text-slate-500'>Full Answer (for exact match)</label>
+              <textarea name='fullAnswer' defaultValue={row.fullAnswer || row.answer} className='w-full rounded-md border border-slate-300 px-3 py-2 text-sm' rows={4} required />
             </div>
             <div>
               <label className='text-xs text-slate-500'>Status</label>

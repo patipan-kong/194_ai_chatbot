@@ -44,7 +44,7 @@ export default async function InteractionDetailPage({ params }) {
             </div>
             <div>
               <p className='text-xs text-slate-500'>Latency</p>
-              <p className='font-medium'>{item.responseTime || 0} ms</p>
+              <p className='font-medium'>{((item.responseTime || 0) / 1000).toFixed(2)} s</p>
             </div>
             <div>
               <p className='text-xs text-slate-500'>Tokens</p>

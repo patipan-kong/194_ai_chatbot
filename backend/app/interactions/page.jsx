@@ -9,7 +9,7 @@ import Link from 'next/link'
 export default async function InteractionsPage({ searchParams }) {
   const p = await searchParams
   const hasSourceParam = Object.prototype.hasOwnProperty.call(p || {}, 'source')
-  const source = hasSourceParam ? String(p?.source || '') : 'chat'
+  const source = hasSourceParam ? String(p?.source || '') : 'chat-public'
   const qs = new URLSearchParams()
   if (p?.modelId) qs.set('modelId', p.modelId)
   if (p?.question) qs.set('question', p.question)
@@ -61,7 +61,9 @@ export default async function InteractionsPage({ searchParams }) {
         <div>
           <label className='text-xs text-slate-500'>Source</label>
           <select name='source' defaultValue={source} className='w-full rounded-lg border border-slate-300 px-3 py-2'>
-            <option value='chat'>Chat</option>
+            <option value='chat-public'>Chat Public</option>
+            <option value='chat-member'>Chat Member</option>
+            <option value='chat'>Chat (All)</option>
             <option value='playground'>Prompt Playground</option>
             <option value=''>All</option>
           </select>
@@ -132,7 +134,7 @@ export default async function InteractionsPage({ searchParams }) {
           { key: 'modelId', header: 'Model' },
           { key: 'inputTokens', header: 'In' },
           { key: 'outputTokens', header: 'Out' },
-          { key: 'responseTime', header: 'Latency' },
+          { key: 'responseTime', header: 'Latency', render: v => `${((v || 0) / 1000).toFixed(2)} s` },
           { key: 'cost', header: 'Cost', render: v => `$${(v || 0).toFixed(5)}` },
           { key: 'createdAt', header: 'At', render: v => new Date(v).toLocaleString() },
           {

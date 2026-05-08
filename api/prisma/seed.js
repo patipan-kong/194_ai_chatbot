@@ -18,24 +18,41 @@ async function main () {
   console.log(`Seeding ${items.length} FAQ items into KnowledgeBase...`)
 
   let upserted = 0
+  const categoryIdByName = new Map()
   for (const item of items) {
+    const categoryName = String(item.category || '').trim()
+    if (!categoryName) continue
+
+    let categoryId = categoryIdByName.get(categoryName)
+    if (!categoryId) {
+      const category = await prisma.category.upsert({
+        where: { name: categoryName },
+        update: {},
+        create: { name: categoryName }
+      })
+      categoryId = category.id
+      categoryIdByName.set(categoryName, categoryId)
+    }
+
     await prisma.knowledgeBase.upsert({
       where: {
         // Use composite uniqueness: same category + question = same row
-        category_question: {
-          category: item.category,
+        categoryId_question: {
+          categoryId,
           question: item.question
         }
       },
       update: {
         answer:    item.answer,
+        fullAnswer: String(item.fullAnswer || item.answer || ''),
         isActive:  true,
         updatedAt: new Date()
       },
       create: {
-        category: item.category,
+        categoryId,
         question: item.question,
         answer:   item.answer,
+        fullAnswer: String(item.fullAnswer || item.answer || ''),
         isActive: true
       }
     })

@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import ModalShell from '@/components/modal-shell'
 import { createKnowledgeBase } from '@/actions/knowledge-base'
 
-export default function KbAddModal() {
+export default function KbAddModal({ categoryOptions = [] }) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -40,7 +40,12 @@ export default function KbAddModal() {
           <form action={onSave} className='space-y-3'>
             <div>
               <label className='text-xs text-slate-500'>Category</label>
-              <input name='category' className='w-full rounded-md border border-slate-300 px-3 py-2 text-sm' required />
+              <select name='category' className='w-full rounded-md border border-slate-300 px-3 py-2 text-sm' required defaultValue=''>
+                <option value='' disabled>Select category</option>
+                {categoryOptions.map(item => (
+                  <option key={item.id} value={item.name}>{item.name} ({item.for194Member ? 'Member' : 'Public'})</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className='text-xs text-slate-500'>Question</label>
@@ -49,6 +54,10 @@ export default function KbAddModal() {
             <div>
               <label className='text-xs text-slate-500'>Answer</label>
               <textarea name='answer' className='w-full rounded-md border border-slate-300 px-3 py-2 text-sm' rows={4} required />
+            </div>
+            <div>
+              <label className='text-xs text-slate-500'>Full Answer (for exact match)</label>
+              <textarea name='fullAnswer' className='w-full rounded-md border border-slate-300 px-3 py-2 text-sm' rows={4} required />
             </div>
             <div>
               <label className='text-xs text-slate-500'>Status</label>

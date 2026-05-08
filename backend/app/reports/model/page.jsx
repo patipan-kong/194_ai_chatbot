@@ -100,7 +100,7 @@ export default async function ModelReportPage({ searchParams }) {
           { key: 'thumbUpRate', header: makeSortHeader('% of ThumbUp', 'thumbUpRate'), render: v => `${((v || 0) * 100).toFixed(1)}%` },
           { key: 'thumbDown', header: makeSortHeader('No. of ThumbDown', 'thumbDown') },
           { key: 'thumbDownRate', header: makeSortHeader('% of ThumbDown', 'thumbDownRate'), render: v => `${((v || 0) * 100).toFixed(1)}%` },
-          { key: 'avgLatency', header: makeSortHeader('Avg. Latency (ms)', 'avgLatency'), render: v => Math.round(v || 0) },
+          { key: 'avgLatency', header: makeSortHeader('Avg. Latency (s)', 'avgLatency'), render: v => ((v || 0) / 1000).toFixed(2) },
           { key: 'avgInputTokens', header: makeSortHeader('Avg. InputTokens', 'avgInputTokens'), render: v => Math.round(v || 0) },
           { key: 'avgOutputTokens', header: makeSortHeader('Avg. OutputTokens', 'avgOutputTokens'), render: v => Math.round(v || 0) },
           { key: 'avgCost', header: makeSortHeader('Avg. Cost', 'avgCost'), render: v => `$${(v || 0).toFixed(6)}` }

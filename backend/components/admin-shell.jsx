@@ -5,6 +5,7 @@ const NAV = [
   { href: '/alert-threshold-settings', label: 'Alert Threshold Settings' },
   { href: '/system-setting', label: 'System Setting' },
   { href: '/prompt-playground', label: 'Prompt Playground' },
+  { href: '/categories', label: 'Categories' },
   { href: '/knowledge-base', label: 'Knowledge Base' },
   { href: '/interactions', label: 'Interactions' },
   { href: '/pending', label: 'Pending Review' },

@@ -16,12 +16,14 @@ const STATUS_BADGE = {
 export default async function KnowledgeBasePage({ searchParams }) {
   const p = await searchParams
   const category = p?.category || ''
+  const categoryAudience = p?.categoryAudience || 'all'
   const status = p?.status || ''
   const deleted = p?.deleted || 'active'
   const page = Math.max(1, Number.parseInt(String(p?.page || '1'), 10) || 1)
   const pageSize = Math.max(1, Number.parseInt(String(p?.pageSize || '20'), 10) || 20)
   const qs = new URLSearchParams()
   if (category) qs.set('category', category)
+  if (categoryAudience) qs.set('categoryAudience', categoryAudience)
   if (status) qs.set('status', status)
   if (deleted) qs.set('deleted', deleted)
   qs.set('page', String(page))
@@ -33,18 +35,29 @@ export default async function KnowledgeBasePage({ searchParams }) {
   ])
   const { items, total = 0, totalPages = 1 } = kbData || {}
   const flash = String(p?.flash || '')
+  const categoryOptions = categories?.categories || []
 
   return (
     <AdminShell title='Knowledge Base'>
       <FlashMessage message={flash} />
-      <KbAddModal />
+      <KbAddModal categoryOptions={categoryOptions} />
 
-      <form className='card mb-4 grid grid-cols-6 gap-3 items-end'>
+      <form className='card mb-4 grid grid-cols-7 gap-3 items-end'>
         <div>
           <label className='text-xs text-slate-500'>Filter Category</label>
           <select name='category' defaultValue={category} className='w-full rounded-lg border border-slate-300 px-3 py-2'>
             <option value=''>All</option>
-            {(categories?.items || []).map(c => <option key={c} value={c}>{c}</option>)}
+            {(categories?.categories || []).map(c => (
+              <option key={c.id} value={c.name}>{c.name} ({c.for194Member ? 'Member' : 'Public'})</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className='text-xs text-slate-500'>Category Audience</label>
+          <select name='categoryAudience' defaultValue={categoryAudience} className='w-full rounded-lg border border-slate-300 px-3 py-2'>
+            <option value='all'>All</option>
+            <option value='public'>Public</option>
+            <option value='member'>Member</option>
           </select>
         </div>
         <div>
@@ -88,7 +101,7 @@ export default async function KnowledgeBasePage({ searchParams }) {
           {
             key: 'actions',
             header: 'Actions',
-            render: (_, row) => <KbRowActions row={row} />
+            render: (_, row) => <KbRowActions row={row} categoryOptions={categoryOptions} />
           }
         ]}
         rows={items || []}
