@@ -1,5 +1,5 @@
 {
-  "default": "gemini-2.5-flash-lite",
+  "default": "glm-4.7-flash",
   "chat": {
     "maxMessageChars": 2000,
     "rateLimit": {
@@ -33,6 +33,10 @@
     "anthropic": {
       "baseURL": "https://api.anthropic.com/v1",
       "envKey": "ANTHROPIC_API_KEY"
+    },
+    "zhipu": {
+      "baseURL": "https://open.bigmodel.cn/api/paas/v4/",
+      "envKey": "ZHIPU_API_KEY"
     }
   },
   "models": [
@@ -44,7 +48,7 @@
       "cost": {
         "token_1m": {
           "input": 0.5,
-          "output": 3.0,
+          "output": 3,
           "caching": 0.05
         }
       },
@@ -324,6 +328,40 @@
       "rating": {
         "accuracy": 4,
         "speed": 2,
+        "helpfulness": 3
+      }
+    },
+    {
+      "id": "glm-4.7-flash",
+      "apiModel": "glm-4.7-flash",
+      "provider": "zhipu",
+      "temperature": 0.3,
+      "cost": {
+        "token_1m": {
+          "input": 0,
+          "output": 0
+        }
+      },
+      "rating": {
+        "accuracy": 4,
+        "speed": 1,
+        "helpfulness": 3
+      }
+    },
+    {
+      "id": "glm-4.5-flash",
+      "apiModel": "glm-4.5-flash",
+      "provider": "zhipu",
+      "temperature": 0.3,
+      "cost": {
+        "token_1m": {
+          "input": 0,
+          "output": 0
+        }
+      },
+      "rating": {
+        "accuracy": 4,
+        "speed": 1,
         "helpfulness": 3
       }
     }
