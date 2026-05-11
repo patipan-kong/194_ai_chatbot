@@ -55,7 +55,7 @@
       "rating": {
         "accuracy": 4,
         "speed": 2,
-        "helpfulness": 3
+        "helpfulness": 4
       }
     },
     {
@@ -72,7 +72,7 @@
       },
       "rating": {
         "accuracy": 4,
-        "speed": 3,
+        "speed": 4,
         "helpfulness": 5
       }
     },
@@ -108,7 +108,7 @@
       },
       "rating": {
         "accuracy": 3,
-        "speed": 3,
+        "speed": 4,
         "helpfulness": 3
       }
     },
@@ -144,7 +144,7 @@
       },
       "rating": {
         "accuracy": 4,
-        "speed": 1,
+        "speed": 2,
         "helpfulness": 3
       }
     },
@@ -162,7 +162,7 @@
       },
       "rating": {
         "accuracy": 3,
-        "speed": 3,
+        "speed": 4,
         "helpfulness": 2
       }
     },
@@ -180,8 +180,8 @@
       },
       "rating": {
         "accuracy": 3,
-        "speed": 1,
-        "helpfulness": 2
+        "speed": 3,
+        "helpfulness": 3
       }
     },
     {
@@ -200,7 +200,7 @@
       "rating": {
         "accuracy": 3,
         "speed": 5,
-        "helpfulness": 2
+        "helpfulness": 3
       }
     },
     {
@@ -217,9 +217,9 @@
         }
       },
       "rating": {
-        "accuracy": 3,
+        "accuracy": 4,
         "speed": 5,
-        "helpfulness": 2
+        "helpfulness": 3
       }
     },
     {
@@ -236,7 +236,7 @@
         }
       },
       "rating": {
-        "accuracy": 4,
+        "accuracy": 5,
         "speed": 5,
         "helpfulness": 4
       }
@@ -273,7 +273,7 @@
       "rating": {
         "accuracy": 3,
         "speed": 4,
-        "helpfulness": 2
+        "helpfulness": 3
       }
     },
     {
@@ -309,7 +309,7 @@
       },
       "rating": {
         "accuracy": 4,
-        "speed": 2,
+        "speed": 3,
         "helpfulness": 4
       }
     },

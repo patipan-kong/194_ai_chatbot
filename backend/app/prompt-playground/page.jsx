@@ -12,11 +12,12 @@ export default async function PromptPlaygroundPage({ searchParams }) {
   historyParams.set('page', String(historyPage))
   historyParams.set('pageSize', '20')
 
-  const [settingsData, modelConfig, historyData, historyDetailData] = await Promise.all([
+  const [settingsData, modelConfig, historyData, historyDetailData, modelReportData] = await Promise.all([
     apiGet('/api/admin/system-settings', '?page=1&pageSize=200'),
     apiGet('/api/admin/models/default'),
     apiGet('/api/admin/prompt-playground/history', `?${historyParams.toString()}`),
-    historyId ? apiGet(`/api/admin/prompt-playground/history/${historyId}`) : Promise.resolve({ item: null })
+    historyId ? apiGet(`/api/admin/prompt-playground/history/${historyId}`) : Promise.resolve({ item: null }),
+    apiGet('/api/admin/model-report')
   ])
 
   const settingItems = settingsData?.items || []
@@ -25,6 +26,13 @@ export default async function PromptPlaygroundPage({ searchParams }) {
   const historyItems = historyData?.items || []
   const historyTotalPages = Number(historyData?.totalPages || 1)
   const selectedHistory = historyDetailData?.item || null
+
+  const modelAvgCosts = {}
+  for (const item of (modelReportData?.items || [])) {
+    if (item.modelId && typeof item.avgCost === 'number') {
+      modelAvgCosts[item.modelId] = item.avgCost
+    }
+  }
 
   const promptOptions = settingItems.map(item => ({
     id: item.id,
@@ -56,6 +64,7 @@ export default async function PromptPlaygroundPage({ searchParams }) {
         selectedHistory={selectedHistory}
         historyPage={historyPage}
         historyTotalPages={historyTotalPages}
+        modelAvgCosts={modelAvgCosts}
       />
     </AdminShell>
   )

@@ -22,6 +22,29 @@ function getTokenCost(model, key) {
   return Number.isFinite(value) ? value : null
 }
 
+function getModelTokenAvgCost(model) {
+  const values = [
+    getTokenCost(model, 'input'),
+    getTokenCost(model, 'output'),
+    getTokenCost(model, 'caching')
+  ].filter(Number.isFinite)
+
+  if (!values.length) return null
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+function getDbAvgCost(modelId, modelAvgCosts) {
+  const v = modelAvgCosts[modelId]
+  return typeof v === 'number' && v > 0 ? v : null
+}
+
+function getEfficiencyScore(accuracy, helpfulness, avgCost) {
+  if (!Number.isFinite(accuracy) || !Number.isFinite(helpfulness) || !Number.isFinite(avgCost) || avgCost <= 0) {
+    return null
+  }
+  return (accuracy + helpfulness) / avgCost
+}
+
 function SortIcon({ dir }) {
   if (!dir) return <span className='ml-1 text-slate-300'>⇅</span>
   return <span className='ml-1'>{dir === 'asc' ? '↑' : '↓'}</span>
@@ -40,7 +63,7 @@ function normalizeResults(result) {
   return []
 }
 
-export default function PromptPlaygroundForm({ promptOptions = [], modelOptions = [], defaultModel = '', historyItems = [], selectedHistory = null, historyPage = 1, historyTotalPages = 1 }) {
+export default function PromptPlaygroundForm({ promptOptions = [], modelOptions = [], defaultModel = '', historyItems = [], selectedHistory = null, historyPage = 1, historyTotalPages = 1, modelAvgCosts = {} }) {
   const firstSetting = promptOptions.find(item => item.isActive) || promptOptions[0] || null
   const [settingId, setSettingId] = useState(firstSetting ? String(firstSetting.id) : '')
   const [promptTemplate, setPromptTemplate] = useState(firstSetting?.systemPromptTemplate || '')
@@ -56,6 +79,12 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
   const [results, setResults] = useState([])
   const [latestHistoryId, setLatestHistoryId] = useState(null)
   const [sort, setSort] = useState({ col: 'model', dir: 'asc' })
+  const [ratingFilters, setRatingFilters] = useState({
+    accuracy: 'all',
+    speed: 'all',
+    helpfulness: 'all',
+    inCost: 'all'
+  })
 
   useEffect(() => {
     try {
@@ -122,8 +151,42 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
     return map
   }, [promptOptions])
 
+  const filteredModelOptions = useMemo(() => {
+    const matchRange = (value, range) => {
+      if (range === 'all') return true
+      if (!Number.isFinite(value)) return false
+      if (range === '3-5') return value >= 3 && value <= 5
+      if (range === '4-5') return value >= 4 && value <= 5
+      if (range === '5') return value === 5
+      return true
+    }
+
+    const matchInCost = (value, range) => {
+      if (range === 'all') return true
+      if (!Number.isFinite(value)) return false
+      if (range === 'lt-0.1') return value < 0.1
+      if (range === 'lt-0.2') return value < 0.2
+      if (range === 'lt-0.5') return value < 0.5
+      return true
+    }
+
+    return modelOptions.filter(item => {
+      const accuracy = getRatingValue(item, 'accuracy')
+      const speed = getRatingValue(item, 'speed')
+      const helpfulness = getRatingValue(item, 'helpfulness')
+      const inCost = getTokenCost(item, 'input')
+
+      return (
+        matchRange(accuracy, ratingFilters.accuracy)
+        && matchRange(speed, ratingFilters.speed)
+        && matchRange(helpfulness, ratingFilters.helpfulness)
+        && matchInCost(inCost, ratingFilters.inCost)
+      )
+    })
+  }, [modelOptions, ratingFilters])
+
   const sortedModelOptions = useMemo(() => {
-    const rows = [...modelOptions]
+    const rows = [...filteredModelOptions]
     const { col, dir } = sort
     if (!col || !dir) return rows
 
@@ -144,6 +207,12 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
       } else if (col === 'accuracy' || col === 'speed' || col === 'helpfulness') {
         av = getRatingValue(a, col)
         bv = getRatingValue(b, col)
+      } else if (col === 'avgCost') {
+        av = getDbAvgCost(a.modelId, modelAvgCosts) ?? getModelTokenAvgCost(a)
+        bv = getDbAvgCost(b.modelId, modelAvgCosts) ?? getModelTokenAvgCost(b)
+      } else if (col === 'efficiency') {
+        av = getEfficiencyScore(getRatingValue(a, 'accuracy'), getRatingValue(a, 'helpfulness'), getDbAvgCost(a.modelId, modelAvgCosts) ?? getModelTokenAvgCost(a))
+        bv = getEfficiencyScore(getRatingValue(b, 'accuracy'), getRatingValue(b, 'helpfulness'), getDbAvgCost(b.modelId, modelAvgCosts) ?? getModelTokenAvgCost(b))
       }
 
       const isString = typeof av === 'string' || typeof bv === 'string'
@@ -161,7 +230,11 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
     })
 
     return rows
-  }, [modelOptions, sort])
+  }, [filteredModelOptions, sort])
+
+  const onRatingFilterChange = (key, value) => {
+    setRatingFilters(prev => ({ ...prev, [key]: value }))
+  }
 
   const toggleSort = col => {
     setSort(prev => {
@@ -302,8 +375,62 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
 
           <div>
             <label className='text-xs text-slate-500 block mb-2'>AI Models (with cost and rating)</label>
-            <div className='overflow-x-auto rounded-lg border border-slate-200'>
-              <table className='w-full text-xs'>
+            <div className='mb-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4'>
+              <div>
+                <label className='text-[11px] text-slate-500'>In</label>
+                <select
+                  value={ratingFilters.inCost}
+                  onChange={event => onRatingFilterChange('inCost', event.target.value)}
+                  className='mt-1 w-full rounded-lg border border-slate-300 px-2 py-1 text-xs'
+                >
+                  <option value='all'>All</option>
+                  <option value='lt-0.1'>&lt;$0.1</option>
+                  <option value='lt-0.2'>&lt;$0.2</option>
+                  <option value='lt-0.5'>&lt;$0.5</option>
+                </select>
+              </div>
+              <div>
+                <label className='text-[11px] text-slate-500'>Accuracy</label>
+                <select
+                  value={ratingFilters.accuracy}
+                  onChange={event => onRatingFilterChange('accuracy', event.target.value)}
+                  className='mt-1 w-full rounded-lg border border-slate-300 px-2 py-1 text-xs'
+                >
+                  <option value='all'>All</option>
+                  <option value='3-5'>3-5</option>
+                  <option value='4-5'>4-5</option>
+                  <option value='5'>5</option>
+                </select>
+              </div>
+              <div>
+                <label className='text-[11px] text-slate-500'>Speed</label>
+                <select
+                  value={ratingFilters.speed}
+                  onChange={event => onRatingFilterChange('speed', event.target.value)}
+                  className='mt-1 w-full rounded-lg border border-slate-300 px-2 py-1 text-xs'
+                >
+                  <option value='all'>All</option>
+                  <option value='3-5'>3-5</option>
+                  <option value='4-5'>4-5</option>
+                  <option value='5'>5</option>
+                </select>
+              </div>
+              <div>
+                <label className='text-[11px] text-slate-500'>Helpfulness</label>
+                <select
+                  value={ratingFilters.helpfulness}
+                  onChange={event => onRatingFilterChange('helpfulness', event.target.value)}
+                  className='mt-1 w-full rounded-lg border border-slate-300 px-2 py-1 text-xs'
+                >
+                  <option value='all'>All</option>
+                  <option value='3-5'>3-5</option>
+                  <option value='4-5'>4-5</option>
+                  <option value='5'>5</option>
+                </select>
+              </div>
+            </div>
+            <div className='rounded-lg border border-slate-200'>
+              <table className='w-full text-[10px]'>
                 <thead className='bg-slate-50 text-slate-600'>
                   <tr>
                     <th className='px-2 py-2 text-left'>Select</th>
@@ -312,15 +439,24 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                     {renderSortHeader('in', 'In', 'right')}
                     {renderSortHeader('out', 'Out', 'right')}
                     {renderSortHeader('cache', 'Cache', 'right')}
+                    {renderSortHeader('avgCost', 'Avg.Cost[100]', 'right')}
                     {renderSortHeader('accuracy', 'Accuracy', 'right')}
                     {renderSortHeader('speed', 'Speed', 'right')}
                     {renderSortHeader('helpfulness', 'Helpfulness', 'right')}
+                    {renderSortHeader('efficiency', 'Score', 'right')}
                   </tr>
                 </thead>
                 <tbody>
                   {sortedModelOptions.map(item => {
                     const checked = selectedModels.includes(item.modelId)
                     const tokenCost = item.cost?.token_1m || {}
+                    const rawAvgCost = getDbAvgCost(item.modelId, modelAvgCosts) ?? getModelTokenAvgCost(item)
+                    const avgCost100 = typeof rawAvgCost === 'number' ? rawAvgCost * 100 : null
+                    const efficiencyScore = getEfficiencyScore(
+                      getRatingValue(item, 'accuracy'),
+                      getRatingValue(item, 'helpfulness'),
+                      avgCost100
+                    )
                     return (
                       <tr key={item.modelId} className='border-t border-slate-100'>
                         <td className='px-2 py-2'>
@@ -338,9 +474,11 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                         <td className='px-2 py-2 text-right text-slate-600'>{formatPrice(tokenCost.input)}</td>
                         <td className='px-2 py-2 text-right text-slate-600'>{formatPrice(tokenCost.output)}</td>
                         <td className='px-2 py-2 text-right text-slate-600'>{formatPrice(tokenCost.caching)}</td>
+                        <td className='px-2 py-2 text-right text-slate-600'>{formatPrice(avgCost100)}</td>
                         <td className='px-2 py-2 text-right text-slate-600'>{getRatingValue(item, 'accuracy') ?? '-'}</td>
                         <td className='px-2 py-2 text-right text-slate-600'>{getRatingValue(item, 'speed') ?? '-'}</td>
                         <td className='px-2 py-2 text-right text-slate-600'>{getRatingValue(item, 'helpfulness') ?? '-'}</td>
+                        <td className='px-2 py-2 text-right text-slate-600'>{typeof efficiencyScore === 'number' ? Math.round(efficiencyScore) : '-'}</td>
                       </tr>
                     )
                   })}
@@ -371,24 +509,35 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                   <th className='py-2 pr-3'>Model</th>
                   <th className='py-2 pr-3'>Latency</th>
                   <th className='py-2 pr-3'>Cost</th>
+                  <th className='py-2 pr-3'>Score</th>
                   <th className='py-2 pr-3'>Answer</th>
                   <th className='py-2'>Interaction</th>
                 </tr>
               </thead>
               <tbody>
-                {results.map(row => (
-                  <tr key={`${row.modelId}-${row.interactionId || 'x'}`} className='border-b border-slate-100 align-top'>
-                    <td className='py-2 pr-3 font-medium'>{row.modelId}</td>
-                    <td className='py-2 pr-3'>{typeof row.latencyMs === 'number' ? `${(row.latencyMs / 1000).toFixed(2)} s` : '-'}</td>
-                    <td className='py-2 pr-3'>{typeof row.cost === 'number' ? `$${row.cost.toFixed(6)}` : '-'}</td>
-                    <td className='py-2 pr-3 whitespace-pre-wrap'>
-                      {row.error ? <span className='text-red-600'>{row.error}</span> : (row.answer || '-')}
-                    </td>
-                    <td className='py-2'>
-                      {row.interactionId ? <Link className='text-brand underline' href={`/interactions/${row.interactionId}`}>Open</Link> : '-'}
-                    </td>
-                  </tr>
-                ))}
+                {results.map(row => {
+                  const modelMeta = modelOptions.find(item => item.modelId === row.modelId)
+                  const rowEfficiency = getEfficiencyScore(
+                    getRatingValue(modelMeta, 'accuracy'),
+                    getRatingValue(modelMeta, 'helpfulness'),
+                    getDbAvgCost(row.modelId, modelAvgCosts) ?? getModelTokenAvgCost(modelMeta)
+                  )
+
+                  return (
+                    <tr key={`${row.modelId}-${row.interactionId || 'x'}`} className='border-b border-slate-100 align-top'>
+                      <td className='py-2 pr-3 font-medium'>{row.modelId}</td>
+                      <td className='py-2 pr-3'>{typeof row.latencyMs === 'number' ? `${(row.latencyMs / 1000).toFixed(2)} s` : '-'}</td>
+                      <td className='py-2 pr-3'>{typeof row.cost === 'number' ? `$${row.cost.toFixed(6)}` : '-'}</td>
+                      <td className='py-2 pr-3'>{typeof rowEfficiency === 'number' ? Math.round(rowEfficiency) : '-'}</td>
+                      <td className='py-2 pr-3 whitespace-pre-wrap'>
+                        {row.error ? <span className='text-red-600'>{row.error}</span> : (row.answer || '-')}
+                      </td>
+                      <td className='py-2'>
+                        {row.interactionId ? <Link className='text-brand underline' href={`/interactions/${row.interactionId}`}>Open</Link> : '-'}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -460,18 +609,29 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                         <th className='py-1 pr-2'>Model</th>
                         <th className='py-1 pr-2'>Latency</th>
                         <th className='py-1 pr-2'>Cost</th>
+                        <th className='py-1 pr-2'>Score</th>
                         <th className='py-1 pr-2'>Answer</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {normalizeResults(selectedHistory.result).map((row, idx) => (
-                        <tr key={`${selectedHistory.id}-${idx}`} className='border-b border-slate-100 align-top'>
-                          <td className='py-1 pr-2'>{row?.modelId || '-'}</td>
-                          <td className='py-1 pr-2'>{typeof row?.latencyMs === 'number' ? `${(row.latencyMs / 1000).toFixed(2)} s` : '-'}</td>
-                          <td className='py-1 pr-2'>{typeof row?.cost === 'number' ? `$${row.cost.toFixed(6)}` : '-'}</td>
-                          <td className='py-1 pr-2 whitespace-pre-wrap'>{row?.error ? <span className='text-red-600'>{row.error}</span> : (row?.answer || '-')}</td>
-                        </tr>
-                      ))}
+                      {normalizeResults(selectedHistory.result).map((row, idx) => {
+                        const modelMeta = modelOptions.find(item => item.modelId === row?.modelId)
+                        const rowEfficiency = getEfficiencyScore(
+                          getRatingValue(modelMeta, 'accuracy'),
+                          getRatingValue(modelMeta, 'helpfulness'),
+                          getDbAvgCost(row?.modelId, modelAvgCosts) ?? getModelTokenAvgCost(modelMeta)
+                        )
+
+                        return (
+                          <tr key={`${selectedHistory.id}-${idx}`} className='border-b border-slate-100 align-top'>
+                            <td className='py-1 pr-2'>{row?.modelId || '-'}</td>
+                            <td className='py-1 pr-2'>{typeof row?.latencyMs === 'number' ? `${(row.latencyMs / 1000).toFixed(2)} s` : '-'}</td>
+                            <td className='py-1 pr-2'>{typeof row?.cost === 'number' ? `$${row.cost.toFixed(6)}` : '-'}</td>
+                            <td className='py-1 pr-2'>{typeof rowEfficiency === 'number' ? Math.round(rowEfficiency) : '-'}</td>
+                            <td className='py-1 pr-2 whitespace-pre-wrap'>{row?.error ? <span className='text-red-600'>{row.error}</span> : (row?.answer || '-')}</td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>

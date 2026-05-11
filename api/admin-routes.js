@@ -1291,6 +1291,27 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
 
   app.get('/api/admin/model-report', { preHandler: adminGuard }, async request => {
     const { from, to } = normalizeDateRange(request.query || {})
+    const modelMetaById = new Map(
+      MODELS.map(model => {
+        const accuracy = Number(model?.rating?.accuracy)
+        const helpfulness = Number(model?.rating?.helpfulness)
+        const tokenCosts = [
+          Number(model?.cost?.token_1m?.input),
+          Number(model?.cost?.token_1m?.output),
+          Number(model?.cost?.token_1m?.caching)
+        ].filter(Number.isFinite)
+
+        return [
+          model.id,
+          {
+            accuracy: Number.isFinite(accuracy) ? accuracy : null,
+            helpfulness: Number.isFinite(helpfulness) ? helpfulness : null,
+            referenceCost: tokenCosts.length ? tokenCosts.reduce((sum, value) => sum + value, 0) / tokenCosts.length : null
+          }
+        ]
+      })
+    )
+
     const rows = await prisma.interaction.findMany({
       where: { createdAt: { gte: from, lte: to } },
       select: { modelId: true, isThumbUp: true, responseTime: true, inputTokens: true, outputTokens: true, cost: true, id: true }
@@ -1332,6 +1353,15 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
 
     const items = [...map.values()].map(v => {
       const unknown = unknownByModel.get(v.modelId) || 0
+      const modelMeta = modelMetaById.get(v.modelId) || null
+      const accuracy = Number.isFinite(modelMeta?.accuracy) ? modelMeta.accuracy : null
+      const helpfulness = Number.isFinite(modelMeta?.helpfulness) ? modelMeta.helpfulness : null
+      const avgCost = v.answers ? v.costSum / v.answers : 0
+      const referenceCost = Number.isFinite(modelMeta?.referenceCost) ? modelMeta.referenceCost : null
+      const efficiencyScore = Number.isFinite(accuracy) && Number.isFinite(helpfulness) && Number.isFinite(referenceCost) && referenceCost > 0
+        ? (accuracy + helpfulness) / referenceCost
+        : null
+
       return {
         modelId: v.modelId,
         answers: v.answers,
@@ -1344,7 +1374,11 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
         avgLatency: v.answers ? v.latencySum / v.answers : 0,
         avgInputTokens: v.answers ? v.inputSum / v.answers : 0,
         avgOutputTokens: v.answers ? v.outputSum / v.answers : 0,
-        avgCost: v.answers ? v.costSum / v.answers : 0,
+        avgCost,
+        referenceCost,
+        accuracy,
+        helpfulness,
+        efficiencyScore,
         totalInputTokens: v.inputSum,
         totalOutputTokens: v.outputSum,
         answerCount: v.answers,

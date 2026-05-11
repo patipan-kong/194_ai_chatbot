@@ -31,7 +31,8 @@ export default async function ModelReportPage({ searchParams }) {
     'avgLatency',
     'avgInputTokens',
     'avgOutputTokens',
-    'avgCost'
+    'avgCost',
+    'efficiencyScore'
   ])
 
   const rows = [...(items || [])].sort((a, b) => {
@@ -103,7 +104,8 @@ export default async function ModelReportPage({ searchParams }) {
           { key: 'avgLatency', header: makeSortHeader('Avg. Latency (s)', 'avgLatency'), render: v => ((v || 0) / 1000).toFixed(2) },
           { key: 'avgInputTokens', header: makeSortHeader('Avg. InputTokens', 'avgInputTokens'), render: v => Math.round(v || 0) },
           { key: 'avgOutputTokens', header: makeSortHeader('Avg. OutputTokens', 'avgOutputTokens'), render: v => Math.round(v || 0) },
-          { key: 'avgCost', header: makeSortHeader('Avg. Cost', 'avgCost'), render: v => `$${(v || 0).toFixed(6)}` }
+          { key: 'avgCost', header: makeSortHeader('Avg. Cost', 'avgCost'), render: v => `$${(v || 0).toFixed(6)}` },
+          { key: 'efficiencyScore', header: makeSortHeader('Efficiency Score', 'efficiencyScore'), render: v => (typeof v === 'number' ? v.toFixed(2) : '-') }
         ]}
         rows={pagedRows}
       />
