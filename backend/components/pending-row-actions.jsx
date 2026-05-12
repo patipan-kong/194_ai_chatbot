@@ -9,7 +9,7 @@ export default function PendingRowActions({ row, models = [], defaultModel = '' 
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const suggestionModels = models.filter(model => Number(model?.rating?.helpfulness) >= 4)
+  const suggestionModels = models.filter(model => Number(model?.rating?.helpfulness) >= 5)
   const [isStatusOpen, setIsStatusOpen] = useState(false)
   const [isPromoteOpen, setIsPromoteOpen] = useState(false)
   const [selectedModel, setSelectedModel] = useState(

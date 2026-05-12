@@ -112,7 +112,78 @@
         "helpfulness": 3
       }
     },
-    
+    {
+      "id": "gpt-5",
+      "label": "GPT-5",
+      "provider": "openai",
+      "temperature": 1,
+      "cost": {
+        "token_1m": {
+          "input": 1.25,
+          "output": 10,
+          "caching": 0.125
+        }
+      },
+      "rating": {
+        "accuracy": 5,
+        "speed": 1,
+        "helpfulness": 4
+      }
+    },
+    {
+      "id": "gpt-5-mini",
+      "label": "GPT-5 Mini",
+      "provider": "openai",
+      "temperature": 1,
+      "cost": {
+        "token_1m": {
+          "input": 0.25,
+          "output": 2,
+          "caching": 0.025
+        }
+      },
+      "rating": {
+        "accuracy": 4,
+        "speed": 2,
+        "helpfulness": 3
+      }
+    },
+    {
+      "id": "gpt-4o-mini",
+      "label": "GPT-4o Mini",
+      "provider": "openai",
+      "temperature": 1,
+      "cost": {
+        "token_1m": {
+          "input": 0.15,
+          "output": 0.6,
+          "caching": 0.075
+        }
+      },
+      "rating": {
+        "accuracy": 3,
+        "speed": 4,
+        "helpfulness": 2
+      }
+    },
+    {
+      "id": "gpt-5-nano",
+      "label": "GPT-5 Nano",
+      "provider": "openai",
+      "temperature": 1,
+      "cost": {
+        "token_1m": {
+          "input": 0.05,
+          "output": 0.4,
+          "caching": 0.005
+        }
+      },
+      "rating": {
+        "accuracy": 3,
+        "speed": 3,
+        "helpfulness": 3
+      }
+    },
     {
       "id": "gpt-oss-20b",
       "apiModel": "openai/gpt-oss-20b",
@@ -259,78 +330,41 @@
         "speed": 2,
         "helpfulness": 3
       }
-    } ,
-    {
-      "id": "gpt-5",
-      "label": "GPT-5",
-      "provider": "openai",
-      "temperature": 1,
-      "cost": {
-        "token_1m": {
-          "input": 1.25,
-          "output": 10,
-          "caching": 0.125
-        }
-      },
-      "rating": {
-        "accuracy": 5,
-        "speed": 1,
-        "helpfulness": 4
-      }
     },
     {
-      "id": "gpt-5-mini",
-      "label": "GPT-5 Mini",
-      "provider": "openai",
-      "temperature": 1,
+      "id": "glm-4.7-flash",
+      "apiModel": "glm-4.7-flash",
+      "provider": "zhipu",
+      "temperature": 0.3,
       "cost": {
         "token_1m": {
-          "input": 0.25,
-          "output": 2,
-          "caching": 0.025
-        }
-      },
-      "rating": {
-        "accuracy": 4,
-        "speed": 2,
-        "helpfulness": 3
-      }
-    },
-    {
-      "id": "gpt-4o-mini",
-      "label": "GPT-4o Mini",
-      "provider": "openai",
-      "temperature": 1,
-      "cost": {
-        "token_1m": {
-          "input": 0.15,
-          "output": 0.6,
-          "caching": 0.075
+          "input": 0,
+          "output": 0
         }
       },
       "rating": {
         "accuracy": 3,
-        "speed": 4,
+        "speed": 1,
         "helpfulness": 2
       }
     },
     {
-      "id": "gpt-5-nano",
-      "label": "GPT-5 Nano",
-      "provider": "openai",
-      "temperature": 1,
+      "id": "glm-4.5-flash",
+      "apiModel": "glm-4.5-flash",
+      "provider": "zhipu",
+      "temperature": 0.3,
       "cost": {
         "token_1m": {
-          "input": 0.05,
-          "output": 0.4,
-          "caching": 0.005
+          "input": 0,
+          "output": 0
         }
       },
       "rating": {
         "accuracy": 3,
-        "speed": 3,
-        "helpfulness": 3
-      }
-    }   
+        "speed": 1,
+        "helpfulness": 2
+      }      
+      
+    }
   ]
 }

@@ -38,11 +38,26 @@ function getDbAvgCost(modelId, modelAvgCosts) {
   return typeof v === 'number' && v > 0 ? v : null
 }
 
-function getEfficiencyScore(accuracy, helpfulness, avgCost) {
+function getEfficiencyScore(accuracy, helpfulness, speed, avgCost) {
+  if (!Number.isFinite(accuracy) || !Number.isFinite(helpfulness) || !Number.isFinite(speed) || !Number.isFinite(avgCost) || avgCost <= 0) {
+    return null
+  }
+
+  const weightedRating = accuracy * 0.45 + helpfulness * 0.35 + speed * 0.2
+  const normalizedCost = Math.sqrt(avgCost * 100)
+  if (!Number.isFinite(normalizedCost) || normalizedCost <= 0) return null
+  return weightedRating / normalizedCost
+}
+
+function getAdminScore(accuracy, helpfulness, avgCost) {
   if (!Number.isFinite(accuracy) || !Number.isFinite(helpfulness) || !Number.isFinite(avgCost) || avgCost <= 0) {
     return null
   }
-  return (accuracy + helpfulness) / avgCost
+
+  const weightedRating = accuracy + helpfulness
+  const normalizedCost = Math.pow(avgCost * 100, 0.2)
+  if (!Number.isFinite(normalizedCost) || normalizedCost <= 0) return null
+  return weightedRating / normalizedCost
 }
 
 function SortIcon({ dir }) {
@@ -211,8 +226,29 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
         av = getDbAvgCost(a.modelId, modelAvgCosts) ?? getModelTokenAvgCost(a)
         bv = getDbAvgCost(b.modelId, modelAvgCosts) ?? getModelTokenAvgCost(b)
       } else if (col === 'efficiency') {
-        av = getEfficiencyScore(getRatingValue(a, 'accuracy'), getRatingValue(a, 'helpfulness'), getDbAvgCost(a.modelId, modelAvgCosts) ?? getModelTokenAvgCost(a))
-        bv = getEfficiencyScore(getRatingValue(b, 'accuracy'), getRatingValue(b, 'helpfulness'), getDbAvgCost(b.modelId, modelAvgCosts) ?? getModelTokenAvgCost(b))
+        av = getEfficiencyScore(
+          getRatingValue(a, 'accuracy'),
+          getRatingValue(a, 'helpfulness'),
+          getRatingValue(a, 'speed'),
+          getDbAvgCost(a.modelId, modelAvgCosts) ?? getModelTokenAvgCost(a)
+        )
+        bv = getEfficiencyScore(
+          getRatingValue(b, 'accuracy'),
+          getRatingValue(b, 'helpfulness'),
+          getRatingValue(b, 'speed'),
+          getDbAvgCost(b.modelId, modelAvgCosts) ?? getModelTokenAvgCost(b)
+        )
+      } else if (col === 'adminScore') {
+        av = getAdminScore(
+          getRatingValue(a, 'accuracy'),
+          getRatingValue(a, 'helpfulness'),
+          getDbAvgCost(a.modelId, modelAvgCosts) ?? getModelTokenAvgCost(a)
+        )
+        bv = getAdminScore(
+          getRatingValue(b, 'accuracy'),
+          getRatingValue(b, 'helpfulness'),
+          getDbAvgCost(b.modelId, modelAvgCosts) ?? getModelTokenAvgCost(b)
+        )
       }
 
       const isString = typeof av === 'string' || typeof bv === 'string'
@@ -230,7 +266,7 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
     })
 
     return rows
-  }, [filteredModelOptions, sort])
+  }, [filteredModelOptions, sort, modelAvgCosts])
 
   const onRatingFilterChange = (key, value) => {
     setRatingFilters(prev => ({ ...prev, [key]: value }))
@@ -375,6 +411,10 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
 
           <div>
             <label className='text-xs text-slate-500 block mb-2'>AI Models (with cost and rating)</label>
+            <div className='mb-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600'>
+              <p>Score = (Accuracy * 0.45 + Helpfulness * 0.35 + Speed * 0.20) / sqrt(Cost[100])</p>
+              <p>A.Score = (Accuracy + Helpfulness) / (Cost[100]^0.2)</p>
+            </div>
             <div className='mb-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4'>
               <div>
                 <label className='text-[11px] text-slate-500'>In</label>
@@ -439,11 +479,12 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                     {renderSortHeader('in', 'In', 'right')}
                     {renderSortHeader('out', 'Out', 'right')}
                     {renderSortHeader('cache', 'Cache', 'right')}
-                    {renderSortHeader('avgCost', 'Avg.Cost[100]', 'right')}
+                    {renderSortHeader('avgCost', 'Cost[100]', 'right')}
                     {renderSortHeader('accuracy', 'Accuracy', 'right')}
                     {renderSortHeader('speed', 'Speed', 'right')}
                     {renderSortHeader('helpfulness', 'Helpfulness', 'right')}
                     {renderSortHeader('efficiency', 'Score', 'right')}
+                    {renderSortHeader('adminScore', 'A.Score', 'right')}
                   </tr>
                 </thead>
                 <tbody>
@@ -455,7 +496,13 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                     const efficiencyScore = getEfficiencyScore(
                       getRatingValue(item, 'accuracy'),
                       getRatingValue(item, 'helpfulness'),
-                      avgCost100
+                      getRatingValue(item, 'speed'),
+                      rawAvgCost
+                    )
+                    const adminScore = getAdminScore(
+                      getRatingValue(item, 'accuracy'),
+                      getRatingValue(item, 'helpfulness'),
+                      rawAvgCost
                     )
                     return (
                       <tr key={item.modelId} className='border-t border-slate-100'>
@@ -479,6 +526,7 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                         <td className='px-2 py-2 text-right text-slate-600'>{getRatingValue(item, 'speed') ?? '-'}</td>
                         <td className='px-2 py-2 text-right text-slate-600'>{getRatingValue(item, 'helpfulness') ?? '-'}</td>
                         <td className='px-2 py-2 text-right text-slate-600'>{typeof efficiencyScore === 'number' ? Math.round(efficiencyScore) : '-'}</td>
+                        <td className='px-2 py-2 text-right text-slate-600'>{typeof adminScore === 'number' ? Math.round(adminScore) : '-'}</td>
                       </tr>
                     )
                   })}
@@ -510,6 +558,7 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                   <th className='py-2 pr-3'>Latency</th>
                   <th className='py-2 pr-3'>Cost</th>
                   <th className='py-2 pr-3'>Score</th>
+                  <th className='py-2 pr-3'>A.Score</th>
                   <th className='py-2 pr-3'>Answer</th>
                   <th className='py-2'>Interaction</th>
                 </tr>
@@ -517,10 +566,17 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
               <tbody>
                 {results.map(row => {
                   const modelMeta = modelOptions.find(item => item.modelId === row.modelId)
+                  const rawAvgCost = getDbAvgCost(row.modelId, modelAvgCosts) ?? getModelTokenAvgCost(modelMeta)
                   const rowEfficiency = getEfficiencyScore(
                     getRatingValue(modelMeta, 'accuracy'),
                     getRatingValue(modelMeta, 'helpfulness'),
-                    getDbAvgCost(row.modelId, modelAvgCosts) ?? getModelTokenAvgCost(modelMeta)
+                    getRatingValue(modelMeta, 'speed'),
+                    rawAvgCost
+                  )
+                  const rowAdminScore = getAdminScore(
+                    getRatingValue(modelMeta, 'accuracy'),
+                    getRatingValue(modelMeta, 'helpfulness'),
+                    rawAvgCost
                   )
 
                   return (
@@ -529,6 +585,7 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                       <td className='py-2 pr-3'>{typeof row.latencyMs === 'number' ? `${(row.latencyMs / 1000).toFixed(2)} s` : '-'}</td>
                       <td className='py-2 pr-3'>{typeof row.cost === 'number' ? `$${row.cost.toFixed(6)}` : '-'}</td>
                       <td className='py-2 pr-3'>{typeof rowEfficiency === 'number' ? Math.round(rowEfficiency) : '-'}</td>
+                      <td className='py-2 pr-3'>{typeof rowAdminScore === 'number' ? Math.round(rowAdminScore) : '-'}</td>
                       <td className='py-2 pr-3 whitespace-pre-wrap'>
                         {row.error ? <span className='text-red-600'>{row.error}</span> : (row.answer || '-')}
                       </td>
@@ -610,16 +667,24 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                         <th className='py-1 pr-2'>Latency</th>
                         <th className='py-1 pr-2'>Cost</th>
                         <th className='py-1 pr-2'>Score</th>
+                        <th className='py-1 pr-2'>A.Score</th>
                         <th className='py-1 pr-2'>Answer</th>
                       </tr>
                     </thead>
                     <tbody>
                       {normalizeResults(selectedHistory.result).map((row, idx) => {
                         const modelMeta = modelOptions.find(item => item.modelId === row?.modelId)
+                        const rawAvgCost = getDbAvgCost(row?.modelId, modelAvgCosts) ?? getModelTokenAvgCost(modelMeta)
                         const rowEfficiency = getEfficiencyScore(
                           getRatingValue(modelMeta, 'accuracy'),
                           getRatingValue(modelMeta, 'helpfulness'),
-                          getDbAvgCost(row?.modelId, modelAvgCosts) ?? getModelTokenAvgCost(modelMeta)
+                          getRatingValue(modelMeta, 'speed'),
+                          rawAvgCost
+                        )
+                        const rowAdminScore = getAdminScore(
+                          getRatingValue(modelMeta, 'accuracy'),
+                          getRatingValue(modelMeta, 'helpfulness'),
+                          rawAvgCost
                         )
 
                         return (
@@ -628,6 +693,7 @@ export default function PromptPlaygroundForm({ promptOptions = [], modelOptions 
                             <td className='py-1 pr-2'>{typeof row?.latencyMs === 'number' ? `${(row.latencyMs / 1000).toFixed(2)} s` : '-'}</td>
                             <td className='py-1 pr-2'>{typeof row?.cost === 'number' ? `$${row.cost.toFixed(6)}` : '-'}</td>
                             <td className='py-1 pr-2'>{typeof rowEfficiency === 'number' ? Math.round(rowEfficiency) : '-'}</td>
+                            <td className='py-1 pr-2'>{typeof rowAdminScore === 'number' ? Math.round(rowAdminScore) : '-'}</td>
                             <td className='py-1 pr-2 whitespace-pre-wrap'>{row?.error ? <span className='text-red-600'>{row.error}</span> : (row?.answer || '-')}</td>
                           </tr>
                         )
