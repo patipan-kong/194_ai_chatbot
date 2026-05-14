@@ -3,6 +3,7 @@
 // runtimes.
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000 // 24h
+const SESSION_REFRESH_BEFORE_MS = 6 * 60 * 60 * 1000 // reissue if < 6h left
 const COOKIE_NAME = 'admin_auth'
 
 const encoder = new TextEncoder()
@@ -87,7 +88,11 @@ export async function verifySessionToken (token) {
 
   if (typeof payload?.u !== 'string' || typeof payload?.e !== 'number') return null
   if (Date.now() > payload.e) return null
-  return { username: payload.u, expiresAt: payload.e }
+  return {
+    username: payload.u,
+    expiresAt: payload.e,
+    needsRefresh: Date.now() > payload.e - SESSION_REFRESH_BEFORE_MS
+  }
 }
 
 export const SESSION_COOKIE_NAME = COOKIE_NAME

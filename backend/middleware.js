@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { SESSION_COOKIE_NAME, verifySessionToken } from './lib/session.js'
+import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS, createSessionToken, verifySessionToken } from './lib/session.js'
 
 const PUBLIC_PATHS = ['/login', '/api/auth/login']
 
@@ -18,7 +18,18 @@ export async function middleware(request) {
     return response
   }
 
-  return NextResponse.next()
+  const response = NextResponse.next()
+  if (session.needsRefresh) {
+    const freshToken = await createSessionToken(session.username)
+    response.cookies.set(SESSION_COOKIE_NAME, freshToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge: SESSION_TTL_SECONDS
+    })
+  }
+  return response
 }
 
 export const config = {

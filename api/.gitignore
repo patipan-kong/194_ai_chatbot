@@ -2,3 +2,6 @@ node_modules
 .env
 
 /generated/prisma
+
+# Runtime-mutable config (admin changes to default model / alert thresholds)
+ai-model.runtime.json

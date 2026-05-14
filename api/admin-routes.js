@@ -552,7 +552,7 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       where: { id },
       include: {
         _count: {
-          select: { knowledgeBase: true }
+          select: { knowledgeBase: { where: { isDelete: false } } }
         }
       }
     })
@@ -1371,7 +1371,7 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     if (!username || !password) {
       return reply.code(400).send({ error: 'username and password required' })
     }
-    const existing = await prisma.adminUser.findFirst({ where: { username, isDelete: false } })
+    const existing = await prisma.adminUser.findFirst({ where: { username } })
     if (existing) {
       return reply.code(409).send({ error: 'username already exists' })
     }
@@ -1394,7 +1394,7 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       }
       if (username !== oldValue.username) {
         const conflict = await prisma.adminUser.findFirst({
-          where: { username, isDelete: false, NOT: { id } }
+          where: { username, NOT: { id } }
         })
         if (conflict) {
           return reply.code(409).send({ error: 'username already exists' })
@@ -1438,11 +1438,16 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     return { ok: true }
   })
 
-  app.post('/api/admin/admin-users/:id/restore', { preHandler: adminGuard }, async request => {
+  app.post('/api/admin/admin-users/:id/restore', { preHandler: adminGuard }, async (request, reply) => {
     const id = toInt(request.params.id)
     const changedBy = String(request.headers['x-admin-user'] || 'admin')
     const oldValue = await prisma.adminUser.findFirst({ where: { id, isDelete: true } })
     if (!oldValue) return { error: 'Not found' }
+
+    const conflict = await prisma.adminUser.findFirst({ where: { username: oldValue.username, isDelete: false } })
+    if (conflict) {
+      return reply.code(409).send({ error: 'username is already taken by another active user' })
+    }
 
     const updated = await prisma.adminUser.update({
       where: { id },

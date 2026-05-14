@@ -48,7 +48,8 @@ function resolveCorsOriginForRequest (request) {
 }
 
 const AI_MODEL_CONFIG_PATH = join(__dirname, 'ai-model.json')
-let aiModelConfig = JSON.parse(readFileSync(AI_MODEL_CONFIG_PATH, 'utf-8'))
+const AI_MODEL_RUNTIME_PATH = join(__dirname, 'ai-model.runtime.json')
+const aiModelConfig = JSON.parse(readFileSync(AI_MODEL_CONFIG_PATH, 'utf-8'))
 const MODELS = aiModelConfig.models
 const PROVIDERS = aiModelConfig.providers
 let DEFAULT_MODEL = aiModelConfig.default
@@ -64,6 +65,7 @@ const DEFAULT_ALERT_SETTINGS = {
 }
 let CHAT_SETTINGS = normalizeChatSettings(aiModelConfig.chat)
 let ALERT_SETTINGS = normalizeAlertSettings(aiModelConfig.alerts)
+loadRuntimeState()
 
 const UNKNOWN_ANSWER_TOKEN = 'UNKNOWN_ANSWER'
 const SETTINGS_REFRESH_MS = 30 * 1000
@@ -160,15 +162,27 @@ function normalizeAlertSettings (alerts = {}) {
   }
 }
 
-function persistAiModelConfig () {
-  writeFileSync(AI_MODEL_CONFIG_PATH, `${JSON.stringify(aiModelConfig, null, 2)}\n`, 'utf-8')
+function persistRuntimeState () {
+  writeFileSync(AI_MODEL_RUNTIME_PATH, `${JSON.stringify({ default: DEFAULT_MODEL, alerts: ALERT_SETTINGS }, null, 2)}\n`, 'utf-8')
+}
+
+function loadRuntimeState () {
+  try {
+    const runtime = JSON.parse(readFileSync(AI_MODEL_RUNTIME_PATH, 'utf-8'))
+    if (runtime.default && MODELS.some(m => m.id === runtime.default)) {
+      DEFAULT_MODEL = runtime.default
+    }
+    if (runtime.alerts) {
+      ALERT_SETTINGS = normalizeAlertSettings({ ...ALERT_SETTINGS, ...runtime.alerts })
+    }
+  } catch {
+    // No runtime file yet; defaults from ai-model.json are used
+  }
 }
 
 function updateAlertSettings (patch = {}) {
-  const next = normalizeAlertSettings({ ...ALERT_SETTINGS, ...patch })
-  aiModelConfig = { ...aiModelConfig, alerts: next }
-  ALERT_SETTINGS = next
-  persistAiModelConfig()
+  ALERT_SETTINGS = normalizeAlertSettings({ ...ALERT_SETTINGS, ...patch })
+  persistRuntimeState()
   return ALERT_SETTINGS
 }
 
@@ -176,10 +190,28 @@ function setDefaultModel (modelId) {
   const nextModel = String(modelId || '').trim()
   if (!nextModel) return DEFAULT_MODEL
   if (!MODELS.some(model => model.id === nextModel)) return DEFAULT_MODEL
-  aiModelConfig = { ...aiModelConfig, default: nextModel }
   DEFAULT_MODEL = nextModel
-  persistAiModelConfig()
+  persistRuntimeState()
   return DEFAULT_MODEL
+}
+
+function validateStartupEnv () {
+  const errors = []
+  if (!process.env.DATABASE_URL) {
+    errors.push('DATABASE_URL is required')
+  }
+  const configuredProviders = Object.keys(PROVIDERS).filter(p => isProviderConfigured(p))
+  if (configuredProviders.length === 0) {
+    errors.push(`No AI provider API keys configured. Set at least one of: ${Object.values(PROVIDERS).map(p => p.envKey).join(', ')}`)
+  }
+  if (errors.length) {
+    for (const err of errors) console.error(`[startup] FATAL: ${err}`)
+    process.exit(1)
+  }
+  const defaultModelConfig = MODELS.find(m => m.id === DEFAULT_MODEL)
+  if (defaultModelConfig && !isProviderConfigured(defaultModelConfig.provider)) {
+    console.warn(`[startup] WARNING: default model "${DEFAULT_MODEL}" uses provider "${defaultModelConfig.provider}" (${PROVIDERS[defaultModelConfig.provider]?.envKey} not set)`)
+  }
 }
 
 async function getGeminiCachedContent (modelId, systemPrompt) {
@@ -856,7 +888,19 @@ app.get('/api/health', async () => {
     dbError = err.message
   }
 
-  const configStatus = MODELS.length && DEFAULT_MODEL ? 'ok' : 'error'
+  const providerStatus = Object.fromEntries(
+    Object.entries(PROVIDERS).map(([name, cfg]) => [
+      name,
+      { configured: isProviderConfigured(name), envKey: cfg.envKey }
+    ])
+  )
+  const defaultModelConfig = MODELS.find(m => m.id === DEFAULT_MODEL)
+  const defaultProviderReady = defaultModelConfig ? isProviderConfigured(defaultModelConfig.provider) : false
+  const anyProviderReady = Object.values(providerStatus).some(p => p.configured)
+
+  const configStatus = MODELS.length && DEFAULT_MODEL && defaultProviderReady ? 'ok'
+    : anyProviderReady ? 'degraded'
+    : 'error'
   const status = dbStatus === 'ok' && configStatus === 'ok' ? 'ok' : 'degraded'
 
   return {
@@ -868,14 +912,17 @@ app.get('/api/health', async () => {
         status: configStatus,
         modelCount: MODELS.length,
         defaultModel: DEFAULT_MODEL,
+        defaultProviderReady,
         chat: CHAT_SETTINGS,
         alerts: ALERT_SETTINGS
-      }
+      },
+      providers: providerStatus
     }
   }
 })
 
 const port = process.env.PORT || 3001
+validateStartupEnv()
 await refreshRuntimeTextConfig(true)
 await app.listen({ port, host: '0.0.0.0' })
 

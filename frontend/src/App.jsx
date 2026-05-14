@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 
+const MAX_CHARS = 2000
+
 const WELCOME_MESSAGE = {
   id: 'welcome',
   role: 'assistant',
@@ -50,6 +52,7 @@ function ThumbButtons ({ interactionId, feedback, onFeedback }) {
         onClick={() => onFeedback(interactionId, true)}
         className={`p-1 rounded transition-colors ${feedback === true ? 'text-green-500' : 'text-gray-300 hover:text-green-500'}`}
         title='役に立った'
+        aria-label='役に立った'
       >
         <svg className='w-3.5 h-3.5' fill={feedback === true ? 'currentColor' : 'none'} stroke='currentColor' viewBox='0 0 24 24'>
           <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5' />
@@ -59,6 +62,7 @@ function ThumbButtons ({ interactionId, feedback, onFeedback }) {
         onClick={() => onFeedback(interactionId, false)}
         className={`p-1 rounded transition-colors ${feedback === false ? 'text-red-500' : 'text-gray-300 hover:text-red-500'}`}
         title='役に立たなかった'
+        aria-label='役に立たなかった'
       >
         <svg className='w-3.5 h-3.5' fill={feedback === false ? 'currentColor' : 'none'} stroke='currentColor' viewBox='0 0 24 24'>
           <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06l3.76.94m-7 10v5a2 2 0 002 2h.095c.5 0 .905-.405.905-.905 0-.714.211-1.412.608-2.006L17 13V4m-7 10h2m5-10h2a2 2 0 012 2v6a2 2 0 01-2 2h-2.5' />
@@ -92,7 +96,7 @@ function ChatBubble ({ message, onFeedback }) {
 
 function TypingIndicator ({ model }) {
   return (
-    <div className='flex justify-start mb-4'>
+    <div className='flex justify-start mb-4' role='status' aria-label='応答を待っています'>
       <Avatar model={model} />
       <div className='bg-white border border-gray-100 rounded-2xl rounded-bl-sm px-4 py-3 shadow'>
         <div className='flex gap-1.5 items-center h-4'>
@@ -110,8 +114,10 @@ export default function App () {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [feedbackError, setFeedbackError] = useState(null)
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
+  const feedbackErrorTimer = useRef(null)
   const sessionId = useRef(localStorage.getItem(SESSION_KEY) || undefined)
   const userId = useRef(getOrCreateUserId())
 
@@ -121,21 +127,25 @@ export default function App () {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
+  useEffect(() => () => clearTimeout(feedbackErrorTimer.current), [])
+
   function clearChat () {
     localStorage.removeItem(MESSAGES_KEY)
     localStorage.removeItem(SESSION_KEY)
     sessionId.current = undefined
     setMessages([WELCOME_MESSAGE])
     setError(null)
+    setFeedbackError(null)
   }
 
   async function sendMessage () {
     const text = input.trim()
-    if (!text || loading) return
+    if (!text || loading || text.length > MAX_CHARS) return
 
+    const userMsgId = Date.now()
     setInput('')
     setError(null)
-    setMessages(prev => [...prev, { id: Date.now(), role: 'user', text }])
+    setMessages(prev => [...prev, { id: userMsgId, role: 'user', text }])
     setLoading(true)
 
     try {
@@ -159,6 +169,9 @@ export default function App () {
         { id: Date.now() + 1, role: 'assistant', text: data.reply, model: data.model, interactionId: data.interactionId ?? null, feedback: null }
       ])
     } catch {
+      // Remove the optimistic user message and restore text so user can retry
+      setMessages(prev => prev.filter(m => m.id !== userMsgId))
+      setInput(text)
       setError('メッセージの送信に失敗しました。もう一度お試しください。')
     } finally {
       setLoading(false)
@@ -167,18 +180,26 @@ export default function App () {
   }
 
   async function handleFeedback (interactionId, isThumbUp) {
+    // Snapshot for rollback if the API call fails
+    const snapshot = messages.slice()
     setMessages(prev => prev.map(msg =>
       msg.interactionId === interactionId ? { ...msg, feedback: isThumbUp } : msg
     ))
     if (!interactionId) return
     try {
       const apiBase = import.meta.env.VITE_API_URL || ''
-      await fetch(`${apiBase}/api/feedback/${interactionId}`, {
+      const res = await fetch(`${apiBase}/api/feedback/${interactionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ isThumbUp })
       })
-    } catch {}
+      if (!res.ok) throw new Error()
+    } catch {
+      setMessages(snapshot)
+      clearTimeout(feedbackErrorTimer.current)
+      setFeedbackError('フィードバックの送信に失敗しました。')
+      feedbackErrorTimer.current = setTimeout(() => setFeedbackError(null), 3000)
+    }
   }
 
   function handleKeyDown (e) {
@@ -187,6 +208,9 @@ export default function App () {
       sendMessage()
     }
   }
+
+  const charCount = input.length
+  const overLimit = charCount > MAX_CHARS
 
   return (
     <div className='min-h-dvh bg-gradient-to-b from-slate-50 to-gray-100 lg:p-4'>
@@ -205,6 +229,7 @@ export default function App () {
               onClick={clearChat}
               className='text-white/70 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/10'
               title='チャットをリセット'
+              aria-label='チャットをリセット'
             >
               <svg className='w-5 h-5' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
                 <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16' />
@@ -222,15 +247,29 @@ export default function App () {
           </div>
 
           {/* Messages */}
-          <main className='flex-1 overflow-y-auto px-4 pt-2 pb-2 scrollbar-hide'>
+          <main
+            className='flex-1 overflow-y-auto px-4 pt-2 pb-2 scrollbar-hide'
+            role='log'
+            aria-live='polite'
+            aria-label='チャット履歴'
+            aria-busy={loading}
+          >
             {messages.map(msg => <ChatBubble key={msg.id} message={msg} onFeedback={handleFeedback} />)}
             {loading && <TypingIndicator model={null} />}
             {error && (
-              <div className='mx-2 mb-3 flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5'>
+              <div role='alert' className='mx-2 mb-3 flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5'>
                 <svg className='w-4 h-4 flex-shrink-0' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
                   <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' />
                 </svg>
                 {error}
+              </div>
+            )}
+            {feedbackError && (
+              <div role='alert' className='mx-2 mb-3 flex items-center gap-2 text-xs text-orange-600 bg-orange-50 border border-orange-100 rounded-xl px-3 py-2.5'>
+                <svg className='w-4 h-4 flex-shrink-0' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                  <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' />
+                </svg>
+                {feedbackError}
               </div>
             )}
             <div ref={bottomRef} />
@@ -238,7 +277,11 @@ export default function App () {
 
           {/* Input */}
           <footer className='bg-white border-t border-gray-200 px-3 py-3 flex-shrink-0'>
-            <div className='flex gap-2 items-end bg-gray-50 rounded-2xl border border-gray-200 px-3 py-2 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100 transition-all'>
+            <div className={`flex gap-2 items-end bg-gray-50 rounded-2xl border px-3 py-2 focus-within:ring-2 transition-all ${
+              overLimit
+                ? 'border-red-400 focus-within:border-red-400 focus-within:ring-red-100'
+                : 'border-gray-200 focus-within:border-indigo-400 focus-within:ring-indigo-100'
+            }`}>
               <textarea
                 ref={inputRef}
                 value={input}
@@ -249,10 +292,11 @@ export default function App () {
                 className='flex-1 resize-none bg-transparent text-sm focus:outline-none max-h-32 overflow-y-auto leading-relaxed text-gray-800 placeholder-gray-400'
                 style={{ minHeight: '24px' }}
                 disabled={loading}
+                aria-label='メッセージを入力'
               />
               <button
                 onClick={sendMessage}
-                disabled={!input.trim() || loading}
+                disabled={!input.trim() || loading || overLimit}
                 className='flex-shrink-0 w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:from-indigo-600 hover:to-purple-700 active:scale-95 transition-all shadow-sm'
                 aria-label='送信'
               >
@@ -261,7 +305,16 @@ export default function App () {
                 </svg>
               </button>
             </div>
-            <p className='text-center text-xs text-gray-300 mt-1.5'>Enter で送信 · Shift+Enter で改行</p>
+            <div className='flex justify-between items-center mt-1.5 px-1'>
+              <p className='text-xs text-gray-300'>Enter で送信 · Shift+Enter で改行</p>
+              {charCount > 0 && (
+                <p className={`text-xs tabular-nums ${
+                  overLimit ? 'text-red-500 font-medium' : charCount > MAX_CHARS * 0.8 ? 'text-orange-400' : 'text-gray-300'
+                }`}>
+                  {charCount}/{MAX_CHARS}
+                </p>
+              )}
+            </div>
           </footer>
         </div>
 
@@ -269,4 +322,3 @@ export default function App () {
     </div>
   )
 }
-
