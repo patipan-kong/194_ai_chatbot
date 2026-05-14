@@ -1,10 +1,9 @@
-import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
+import { requireAdminUsername } from '@/lib/admin-session'
 
 export async function GET(request, { params }) {
   const { id } = await params
-  const jar = await cookies()
-  const adminUser = jar.get('admin_user')?.value || 'admin'
+  const adminUser = await requireAdminUsername()
   const key = process.env.ADMIN_API_KEY || ''
   const base = process.env.API_BASE_URL || 'http://localhost:3001'
 

@@ -7,6 +7,8 @@ import Anthropic from '@anthropic-ai/sdk'
 import { PrismaClient } from './generated/prisma/index.js'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { registerAdminRoutes } from './admin-routes.js'
+import { calculateInteractionCost } from './utils.js'
+import { chatRequestSchema, feedbackRequestSchema, formatZodError } from './validation.js'
 import { readFileSync, writeFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
@@ -16,6 +18,34 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const _pgAdapter = new PrismaPg({ connectionString: process.env.DATABASE_URL })
 const prisma = new PrismaClient({ adapter: _pgAdapter })
+
+function parseAllowedOrigins (value, fallback = []) {
+  if (typeof value !== 'string' || !value.trim()) return fallback
+  return value
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+const DEFAULT_PUBLIC_ORIGINS = ['http://localhost:5173']
+const DEFAULT_ADMIN_ORIGINS = ['http://localhost:3100']
+const PUBLIC_CORS_ORIGINS = parseAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS, DEFAULT_PUBLIC_ORIGINS)
+const ADMIN_CORS_ORIGINS = parseAllowedOrigins(process.env.ADMIN_CORS_ALLOWED_ORIGINS, DEFAULT_ADMIN_ORIGINS)
+
+function isAllowedOrigin (origin, allowedOrigins = []) {
+  if (!origin) return false
+  return allowedOrigins.includes(origin)
+}
+
+function resolveCorsOriginForRequest (request) {
+  const origin = request.headers.origin
+  const routePath = request.raw.url || ''
+  const isAdminRoute = routePath === '/api/admin' || routePath.startsWith('/api/admin/')
+
+  if (!origin) return false
+  if (isAdminRoute) return isAllowedOrigin(origin, ADMIN_CORS_ORIGINS)
+  return isAllowedOrigin(origin, PUBLIC_CORS_ORIGINS)
+}
 
 const AI_MODEL_CONFIG_PATH = join(__dirname, 'ai-model.json')
 let aiModelConfig = JSON.parse(readFileSync(AI_MODEL_CONFIG_PATH, 'utf-8'))
@@ -173,11 +203,24 @@ async function getGeminiCachedContent (modelId, systemPrompt) {
   return cacheEntry
 }
 
+// Strips content from FAQ fields that could be interpreted as system-prompt instructions.
+// Guards against: template placeholder re-injection ({{...}}) and bracket-style section
+// headers ([ALL CAPS]) that match the format used by the system prompt template itself.
+function sanitizeFaqField (text) {
+  if (typeof text !== 'string') return ''
+  return text
+    .replace(/\{\{[^}]*\}\}/g, '')
+    .replace(/^\[([A-Z][A-Z\s]*)\][ \t]*$/gm, '($1)')
+    .trim()
+}
+
 function buildSystemPrompt (template, rows) {
   const faqText = rows
     .map(item => {
-      const categoryName = item?.categoryRef?.name || item?.category || 'General'
-      return `#${categoryName}\nQ:${item.question}\nA:${item.answer}`
+      const categoryName = sanitizeFaqField(item?.categoryRef?.name || item?.category || 'General')
+      const question = sanitizeFaqField(item.question)
+      const answer = sanitizeFaqField(item.answer)
+      return `#${categoryName}\nQ:${question}\nA:${answer}`
     })
     .join('\n')
   console.log(`Building system prompt with ${rows.length} active FAQ items`)
@@ -300,11 +343,13 @@ async function refreshRuntimeTextConfig (force = false) {
   _settingsExpiresAt = now + SETTINGS_REFRESH_MS
 }
 
-const app = Fastify({ logger: true })
+const app = Fastify({ logger: true, trustProxy: true })
 
-await app.register(cors, {
-  origin: true,
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS']
+await app.register(cors, () => (request, cb) => {
+  cb(null, {
+    origin: resolveCorsOriginForRequest(request),
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS']
+  })
 })
 await app.register(rateLimit, {
   global: false,
@@ -339,14 +384,17 @@ await registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTextConfig, {
 })
 
 function validateChatRequestPayload (rawBody = {}) {
-  const modelId = rawBody.model || DEFAULT_MODEL
-  const message = typeof rawBody.message === 'string' ? rawBody.message.trim() : ''
+  const parsed = chatRequestSchema.safeParse(rawBody)
+  if (!parsed.success) {
+    return { error: formatZodError(parsed.error) }
+  }
+  const { message, model, userId } = parsed.data
 
-  if (!message) return { error: 'message is required' }
   if (message.length > CHAT_SETTINGS.maxMessageChars) {
     return { error: `message exceeds max length (${CHAT_SETTINGS.maxMessageChars})` }
   }
 
+  const modelId = model || DEFAULT_MODEL
   const modelConfig = MODELS.find(m => m.id === modelId)
   if (!modelConfig) return { error: `Unknown model: ${modelId}` }
 
@@ -357,7 +405,7 @@ function validateChatRequestPayload (rawBody = {}) {
 
   return {
     modelId,
-    userId: rawBody.userId,
+    userId,
     message,
     modelConfig,
     apiModelId: modelConfig.apiModel || modelId
@@ -406,6 +454,104 @@ async function generateGeminiResponse ({ apiModelId, message, systemPrompt, temp
   }
 }
 
+async function callAnthropicProvider ({ apiModelId, message, systemPrompt, temperature }) {
+  const response = await _anthropicClient.messages.create({
+    model: apiModelId,
+    system: systemPrompt,
+    temperature,
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: message }]
+  })
+
+  const text = response.content
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('\n')
+
+  return {
+    text,
+    inputTokens: response.usage?.input_tokens,
+    outputTokens: response.usage?.output_tokens,
+    alreadyStreamed: false
+  }
+}
+
+async function callGeminiProvider ({ apiModelId, message, systemPrompt, temperature, useCache = false }) {
+  const response = await generateGeminiResponse({
+    apiModelId,
+    message,
+    systemPrompt,
+    temperature,
+    useCache
+  })
+
+  return {
+    text: response.text || '',
+    inputTokens: response.usageMetadata?.promptTokenCount,
+    outputTokens: response.usageMetadata?.candidatesTokenCount,
+    alreadyStreamed: false
+  }
+}
+
+async function callOpenAiCompatibleProvider ({ provider, apiModelId, message, systemPrompt, temperature, onToken }) {
+  const client = getClient(provider)
+
+  if (onToken) {
+    let streamedText = ''
+    const completion = await client.chat.completions.create({
+      model: apiModelId,
+      temperature,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: message }
+      ],
+      stream: true
+    })
+
+    for await (const chunk of completion) {
+      const delta = chunk.choices?.[0]?.delta?.content || ''
+      if (!delta) continue
+      streamedText += delta
+      await onToken(delta)
+    }
+
+    return {
+      text: streamedText,
+      inputTokens: null,
+      outputTokens: null,
+      alreadyStreamed: true
+    }
+  }
+
+  const completion = await client.chat.completions.create({
+    model: apiModelId,
+    temperature,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: message }
+    ]
+  })
+
+  return {
+    text: completion.choices?.[0]?.message?.content || '',
+    inputTokens: completion.usage?.prompt_tokens,
+    outputTokens: completion.usage?.completion_tokens,
+    alreadyStreamed: false
+  }
+}
+
+async function callProvider ({ provider, apiModelId, message, systemPrompt, temperature, onToken, useCache = false }) {
+  if (provider === 'anthropic') {
+    return callAnthropicProvider({ apiModelId, message, systemPrompt, temperature })
+  }
+
+  if (provider === 'gemini') {
+    return callGeminiProvider({ apiModelId, message, systemPrompt, temperature, useCache })
+  }
+
+  return callOpenAiCompatibleProvider({ provider, apiModelId, message, systemPrompt, temperature, onToken })
+}
+
 async function generateChatResponse ({ message, modelId, userId, modelConfig, apiModelId, onToken }) {
   const t0 = Date.now()
   const runtimeFaqConfig = getRuntimeFaqConfigForUser(userId)
@@ -427,59 +573,18 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
     return { reply, model: modelId, interactionId }
   }
 
-  if (modelConfig.provider === 'anthropic') {
-    const response = await _anthropicClient.messages.create({
-      model: apiModelId,
-      system: systemPrompt,
-      temperature: modelConfig.temperature,
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: message }]
-    })
-    const text = response.content
-      .filter(block => block.type === 'text')
-      .map(block => block.text)
-      .join('\n')
-    const isNoAnswer = isNoAnswerResponse(text)
-    const reply = cleanResponse(text)
-    if (onToken) await streamTextChunks(reply, onToken)
-    const interactionMeta = await logInteraction({
-      userId,
-      modelId,
-      message,
-      reply,
-      responseTime: Date.now() - t0,
-      inputTokens: response.usage?.input_tokens,
-      outputTokens: response.usage?.output_tokens
-    })
-    const interactionId = interactionMeta?.id || null
-    if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
-    return { reply, model: modelId, interactionId }
-  }
-
+  let providerResult
   if (modelConfig.provider === 'gemini') {
     try {
-      const response = await generateGeminiResponse({
+      providerResult = await callProvider({
+        provider: modelConfig.provider,
         apiModelId,
         message,
         systemPrompt,
         temperature: modelConfig.temperature,
+        onToken,
         useCache: false
       })
-      const isNoAnswer = isNoAnswerResponse(response.text)
-      const reply = cleanResponse(response.text)
-      if (onToken) await streamTextChunks(reply, onToken)
-      const interactionMeta = await logInteraction({
-        userId,
-        modelId,
-        message,
-        reply,
-        responseTime: Date.now() - t0,
-        inputTokens: response.usageMetadata?.promptTokenCount,
-        outputTokens: response.usageMetadata?.candidatesTokenCount
-      })
-      const interactionId = interactionMeta?.id || null
-      if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
-      return { reply, model: modelId, interactionId }
     } catch (geminiErr) {
       if (isGeminiLocationUnsupportedError(geminiErr)) {
         const fallbackModel = findFallbackModel(['gemini'])
@@ -503,54 +608,30 @@ async function generateChatResponse ({ message, modelId, userId, modelConfig, ap
       app.log.error({ geminiErr, modelId }, 'Gemini native request failed')
       throw geminiErr
     }
-  }
-
-  const client = getClient(modelConfig.provider)
-  if (onToken) {
-    let streamedText = ''
-    const completion = await client.chat.completions.create({
-      model: apiModelId,
+  } else {
+    providerResult = await callProvider({
+      provider: modelConfig.provider,
+      apiModelId,
+      message,
+      systemPrompt,
       temperature: modelConfig.temperature,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: message }
-      ],
-      stream: true
+      onToken
     })
-
-    for await (const chunk of completion) {
-      const delta = chunk.choices?.[0]?.delta?.content || ''
-      if (!delta) continue
-      streamedText += delta
-      await onToken(delta)
-    }
-
-    const isNoAnswer = isNoAnswerResponse(streamedText)
-    const reply = cleanResponse(streamedText)
-    const interactionMeta = await logInteraction({ userId, modelId, message, reply, responseTime: Date.now() - t0 })
-    const interactionId = interactionMeta?.id || null
-    if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
-    return { reply, model: modelId, interactionId }
   }
 
-  const completion = await client.chat.completions.create({
-    model: apiModelId,
-    temperature: modelConfig.temperature,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: message }
-    ]
-  })
-  const isNoAnswer = isNoAnswerResponse(completion.choices[0].message.content)
-  const reply = cleanResponse(completion.choices[0].message.content)
+  const isNoAnswer = isNoAnswerResponse(providerResult.text)
+  const reply = cleanResponse(providerResult.text)
+  if (onToken && !providerResult.alreadyStreamed) {
+    await streamTextChunks(reply, onToken)
+  }
   const interactionMeta = await logInteraction({
     userId,
     modelId,
     message,
     reply,
     responseTime: Date.now() - t0,
-    inputTokens: completion.usage?.prompt_tokens,
-    outputTokens: completion.usage?.completion_tokens
+    inputTokens: providerResult.inputTokens,
+    outputTokens: providerResult.outputTokens
   })
   const interactionId = interactionMeta?.id || null
   if (isNoAnswer) await addPendingReviewForNoAnswer(message, reply, interactionId)
@@ -752,11 +833,14 @@ app.post('/api/chat/stream', {
 
 app.patch('/api/feedback/:id', async (request, reply) => {
   const id = parseInt(request.params.id, 10)
-  const { isThumbUp } = request.body
-  if (isNaN(id) || typeof isThumbUp !== 'boolean') {
-    return reply.code(400).send({ error: 'Invalid request' })
+  if (Number.isNaN(id) || id <= 0) {
+    return reply.code(400).send({ error: 'Invalid id' })
   }
-  await prisma.interaction.update({ where: { id }, data: { isThumbUp } })
+  const parsed = feedbackRequestSchema.safeParse(request.body || {})
+  if (!parsed.success) {
+    return reply.code(400).send({ error: formatZodError(parsed.error) })
+  }
+  await prisma.interaction.update({ where: { id }, data: { isThumbUp: parsed.data.isThumbUp } })
   return { ok: true }
 })
 
@@ -797,7 +881,7 @@ await app.listen({ port, host: '0.0.0.0' })
 
 async function logInteraction ({ userId, modelId, message, reply, responseTime, inputTokens, outputTokens, settingId }) {
   try {
-    const cost = calculateInteractionCost({ modelId, inputTokens, outputTokens })
+    const cost = calculateInteractionCost(MODELS, { modelId, inputTokens, outputTokens })
     const record = await prisma.interaction.create({
       data: {
         userId:       userId || 'anonymous',
@@ -822,23 +906,6 @@ async function logInteraction ({ userId, modelId, message, reply, responseTime, 
     app.log.warn({ err }, 'Failed to log interaction')
     return null
   }
-}
-
-function calculateInteractionCost ({ modelId, inputTokens, outputTokens }) {
-  const model = MODELS.find(m => m.id === modelId)
-  const inputPricePer1M = model?.cost?.token_1m?.input
-  const outputPricePer1M = model?.cost?.token_1m?.output
-
-  if (typeof inputPricePer1M !== 'number' || typeof outputPricePer1M !== 'number') {
-    return 0
-  }
-
-  const inputPrice = inputPricePer1M / 1_000_000
-  const outputPrice = outputPricePer1M / 1_000_000
-  const inTokens = Number.isFinite(inputTokens) ? inputTokens : 0
-  const outTokens = Number.isFinite(outputTokens) ? outputTokens : 0
-
-  return (inTokens * inputPrice) + (outTokens * outputPrice)
 }
 
 async function addPendingReviewForNoAnswer (question, aiResponse, interactionId) {

@@ -1,5 +1,5 @@
 {
-  "default": "llama-4-scout-17b-16e-instruct",
+  "default": "gemini-2.5-flash-lite",
   "chat": {
     "maxMessageChars": 2000,
     "rateLimit": {
@@ -112,7 +112,6 @@
         "helpfulness": 3
       }
     },
-    
     {
       "id": "gpt-oss-20b",
       "apiModel": "openai/gpt-oss-20b",
@@ -259,7 +258,7 @@
         "speed": 2,
         "helpfulness": 3
       }
-    } ,
+    },
     {
       "id": "gpt-5",
       "label": "GPT-5",
@@ -331,6 +330,6 @@
         "speed": 3,
         "helpfulness": 3
       }
-    }   
+    }
   ]
 }

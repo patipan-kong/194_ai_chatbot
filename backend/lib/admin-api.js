@@ -1,8 +1,7 @@
-import { cookies } from 'next/headers'
+import { requireAdminUsername } from './admin-session.js'
 
 async function adminHeaders() {
-  const jar = await cookies()
-  const adminUser = jar.get('admin_user')?.value || 'admin'
+  const adminUser = await requireAdminUsername()
   const key = process.env.ADMIN_API_KEY || ''
   const headers = { 'Content-Type': 'application/json', 'x-admin-user': adminUser }
   if (key) headers['x-admin-key'] = key

@@ -6,12 +6,11 @@ import FlashMessage from '@/components/flash-message'
 import { apiGet } from '@/lib/admin-api'
 import { createAdminUser } from '@/actions/admin-users'
 import { redirect } from 'next/navigation'
-import { cookies } from 'next/headers'
+import { requireAdminUsername } from '@/lib/admin-session'
 
 export default async function AdminUsersPage({ searchParams }) {
   const p = await searchParams
-  const jar = await cookies()
-  const currentAdminUser = String(jar.get('admin_user')?.value || '')
+  const currentAdminUser = await requireAdminUsername('')
   const deleted = p?.deleted || 'active'
   const page = Math.max(1, Number.parseInt(String(p?.page || '1'), 10) || 1)
   const pageSize = Math.max(1, Number.parseInt(String(p?.pageSize || '20'), 10) || 20)

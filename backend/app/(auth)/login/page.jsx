@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
+import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS, createSessionToken, verifySessionToken } from '@/lib/session'
 
 async function loginAction(formData) {
   'use server'
@@ -7,7 +8,10 @@ async function loginAction(formData) {
   const username = String(formData.get('username') || '').trim()
   const password = String(formData.get('password') || '')
 
-  // 1. Try DB login via API
+  if (!username || !password) {
+    redirect('/login?error=1')
+  }
+
   let authenticatedUser = null
   try {
     const base = process.env.API_BASE_URL || 'http://localhost:3001'
@@ -26,28 +30,26 @@ async function loginAction(formData) {
     }
   } catch {}
 
-  // 2. Fallback: env var credentials
-  if (!authenticatedUser) {
-    const expectedUser = process.env.ADMIN_UI_USER || 'admin'
-    const expectedPass = process.env.ADMIN_UI_PASSWORD || 'admin123'
-    if (username === expectedUser && password === expectedPass) {
-      authenticatedUser = username
-    }
-  }
-
   if (!authenticatedUser) {
     redirect('/login?error=1')
   }
 
+  const token = await createSessionToken(authenticatedUser)
   const jar = await cookies()
-  jar.set('admin_auth', 'ok', { httpOnly: true, sameSite: 'lax', path: '/' })
-  jar.set('admin_user', authenticatedUser, { httpOnly: true, sameSite: 'lax', path: '/' })
+  jar.set(SESSION_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: SESSION_TTL_SECONDS
+  })
   redirect('/dashboard')
 }
 
 export default async function LoginPage({ searchParams }) {
   const jar = await cookies()
-  if (jar.get('admin_auth')?.value) {
+  const existing = jar.get(SESSION_COOKIE_NAME)?.value
+  if (existing && (await verifySessionToken(existing))) {
     redirect('/dashboard')
   }
 

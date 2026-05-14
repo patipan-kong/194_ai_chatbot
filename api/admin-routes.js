@@ -1,4 +1,34 @@
+import { calculateInteractionCost } from './utils.js'
+import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
+
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY || ''
+const SCRYPT_KEY_LEN = 64
+
+function hashPassword (password) {
+  const salt = randomBytes(16).toString('hex')
+  const hash = scryptSync(password, salt, SCRYPT_KEY_LEN).toString('hex')
+  return `scrypt:${salt}:${hash}`
+}
+
+function verifyPassword (password, stored) {
+  if (stored.startsWith('scrypt:')) {
+    const parts = stored.split(':')
+    if (parts.length !== 3) return false
+    const [, salt, expectedHex] = parts
+    const expectedBuf = Buffer.from(expectedHex, 'hex')
+    const actualBuf = scryptSync(password, salt, SCRYPT_KEY_LEN)
+    if (expectedBuf.length !== actualBuf.length) return false
+    return timingSafeEqual(expectedBuf, actualBuf)
+  }
+  // Legacy plaintext — constant-time comparison for migration path
+  const storedBuf = Buffer.from(stored)
+  const inputBuf = Buffer.from(password)
+  if (storedBuf.length !== inputBuf.length) return false
+  return timingSafeEqual(storedBuf, inputBuf)
+}
+const DEFAULT_DASHBOARD_MODEL_WINDOW_DAYS = 90
+const MAX_DASHBOARD_MODEL_WINDOW_DAYS = 365
+const SEARCH_ANALYTICS_GROUP_LIMIT = 5000
 
 function toDate(value, fallback) {
   if (!value) return fallback
@@ -9,6 +39,11 @@ function toDate(value, fallback) {
 function toInt(value, fallback = 0) {
   const n = Number.parseInt(value, 10)
   return Number.isNaN(n) ? fallback : n
+}
+
+function getDashboardModelWindowDays() {
+  const configured = toInt(process.env.DASHBOARD_MODEL_WINDOW_DAYS, DEFAULT_DASHBOARD_MODEL_WINDOW_DAYS)
+  return Math.min(MAX_DASHBOARD_MODEL_WINDOW_DAYS, Math.max(1, configured))
 }
 
 function mapPendingStatus(status) {
@@ -23,20 +58,6 @@ function normalizeDateRange(query) {
   const from = toDate(query?.from, new Date(now.getFullYear(), now.getMonth(), 1))
   const to = toDate(query?.to, now)
   return { from, to }
-}
-
-function calculateInteractionCostForModel(MODELS, { modelId, inputTokens, outputTokens }) {
-  const model = MODELS.find(m => m.id === modelId)
-  const inputPricePer1M = model?.cost?.token_1m?.input
-  const outputPricePer1M = model?.cost?.token_1m?.output
-
-  if (typeof inputPricePer1M !== 'number' || typeof outputPricePer1M !== 'number') {
-    return 0
-  }
-
-  const inTokens = Number.isFinite(inputTokens) ? inputTokens : 0
-  const outTokens = Number.isFinite(outputTokens) ? outputTokens : 0
-  return (inTokens * (inputPricePer1M / 1_000_000)) + (outTokens * (outputPricePer1M / 1_000_000))
 }
 
 function normalizePageQuery(query, defaults = { page: 1, pageSize: 50, maxPageSize: 200 }) {
@@ -208,6 +229,9 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     const now = new Date()
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+    const dashboardModelWindowDays = getDashboardModelWindowDays()
+    const modelWindowStart = new Date(now)
+    modelWindowStart.setDate(now.getDate() - dashboardModelWindowDays)
 
     const [
       todayQuestions,
@@ -219,8 +243,10 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       pendingCount,
       dailyCost,
       monthlyCost,
-      interactions,
-      pendingUnknown
+      interactionSummary,
+      interactionThumbUp,
+      interactionThumbDown,
+      pendingUnknownByModel
     ] = await Promise.all([
       prisma.interaction.count({ where: { createdAt: { gte: todayStart } } }),
       prisma.interaction.count({ where: { createdAt: { gte: todayStart }, isThumbUp: true } }),
@@ -231,8 +257,31 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       prisma.pendingReview.count({ where: { status: 'PENDING' } }),
       prisma.interaction.aggregate({ where: { createdAt: { gte: todayStart } }, _sum: { cost: true }, _count: { id: true } }),
       prisma.interaction.aggregate({ where: { createdAt: { gte: monthStart } }, _sum: { cost: true }, _count: { id: true } }),
-      prisma.interaction.findMany({ select: { modelId: true, isThumbUp: true, cost: true, responseTime: true } }),
-      prisma.pendingReview.findMany({ where: { source: 'UNKNOWN_ANSWER', interactionId: { not: null } }, select: { interaction: { select: { modelId: true } } } })
+      prisma.interaction.groupBy({
+        by: ['modelId'],
+        where: { createdAt: { gte: modelWindowStart } },
+        _count: { _all: true },
+        _sum: { cost: true, responseTime: true }
+      }),
+      prisma.interaction.groupBy({
+        by: ['modelId'],
+        where: { createdAt: { gte: modelWindowStart }, isThumbUp: true },
+        _count: { _all: true }
+      }),
+      prisma.interaction.groupBy({
+        by: ['modelId'],
+        where: { createdAt: { gte: modelWindowStart }, isThumbUp: false },
+        _count: { _all: true }
+      }),
+      prisma.$queryRaw`
+        SELECT i."modelId" AS "modelId", COUNT(*)::int AS "unknownCount"
+        FROM "PendingReview" p
+        JOIN "Interaction" i ON i."id" = p."interactionId"
+        WHERE p."source" = 'UNKNOWN_ANSWER'
+          AND p."interactionId" IS NOT NULL
+          AND p."createdAt" >= ${modelWindowStart}
+        GROUP BY i."modelId"
+      `
     ])
 
     const byModel = new Map()
@@ -250,7 +299,13 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       })
     }
 
-    for (const row of interactions) {
+    const thumbUpByModel = new Map(interactionThumbUp.map(row => [row.modelId, row._count._all || 0]))
+    const thumbDownByModel = new Map(interactionThumbDown.map(row => [row.modelId, row._count._all || 0]))
+    const unknownByModel = new Map(
+      pendingUnknownByModel.map(row => [row.modelId, Number(row.unknownCount) || 0])
+    )
+
+    for (const row of interactionSummary) {
       const entry = byModel.get(row.modelId) || {
         modelId: row.modelId,
         label: row.modelId,
@@ -262,18 +317,13 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
         sumLatency: 0,
         unknown: 0
       }
-      entry.answers += 1
-      if (row.isThumbUp === true) entry.thumbUp += 1
-      if (row.isThumbUp === false) entry.thumbDown += 1
-      entry.sumCost += row.cost || 0
-      entry.sumLatency += row.responseTime || 0
+      entry.answers = row._count._all || 0
+      entry.thumbUp = thumbUpByModel.get(row.modelId) || 0
+      entry.thumbDown = thumbDownByModel.get(row.modelId) || 0
+      entry.sumCost = row._sum.cost || 0
+      entry.sumLatency = row._sum.responseTime || 0
+      entry.unknown = unknownByModel.get(row.modelId) || 0
       byModel.set(row.modelId, entry)
-    }
-
-    for (const row of pendingUnknown) {
-      const modelId = row.interaction?.modelId
-      if (!modelId || !byModel.has(modelId)) continue
-      byModel.get(modelId).unknown += 1
     }
 
     const modelRouting = [...byModel.values()].map(entry => ({
@@ -953,7 +1003,7 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     if (!rows.length) return { updated: 0 }
 
     const updates = rows.map(row => {
-      const cost = calculateInteractionCostForModel(MODELS, row)
+      const cost = calculateInteractionCost(MODELS, row)
       return prisma.interaction.update({ where: { id: row.id }, data: { cost } })
     })
 
@@ -1021,24 +1071,108 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       }
     }
 
-    const items = await prisma.pendingReview.findMany({ where, orderBy: { createdAt: 'desc' } })
+    let groupedRows
+    let totalRows
 
-    const grouped = new Map()
-    for (const item of items) {
-      const key = item.question
-      const curr = grouped.get(key) || { question: item.question, count: 0, latest: item }
-      curr.count += 1
-      if (new Date(item.createdAt) > new Date(curr.latest.createdAt)) curr.latest = item
-      grouped.set(key, curr)
+    if (mappedStatus) {
+      [groupedRows, totalRows] = await Promise.all([
+        prisma.$queryRaw`
+          SELECT
+            grouped."question" AS "question",
+            grouped."count"::int AS "count",
+            grouped."id" AS "id",
+            grouped."aiResponse" AS "aiResponse",
+            grouped."source" AS "source",
+            grouped."status" AS "status",
+            grouped."reviewNote" AS "reviewNote",
+            grouped."resolvedBy" AS "resolvedBy",
+            grouped."resolvedAt" AS "resolvedAt",
+            grouped."interactionId" AS "interactionId",
+            grouped."createdAt" AS "createdAt",
+            grouped."updatedAt" AS "updatedAt"
+          FROM (
+            SELECT
+              p.*,
+              COUNT(*) OVER (PARTITION BY p."question") AS "count",
+              ROW_NUMBER() OVER (PARTITION BY p."question" ORDER BY p."createdAt" DESC, p."id" DESC) AS "rn"
+            FROM "PendingReview" p
+            WHERE p."status" = ${mappedStatus}
+              AND p."question" IS NOT NULL
+              AND LENGTH(TRIM(p."question")) > 0
+          ) grouped
+          WHERE grouped."rn" = 1
+          ORDER BY grouped."createdAt" DESC, grouped."id" DESC
+          OFFSET ${pagination.skip}
+          LIMIT ${pagination.pageSize}
+        `,
+        prisma.$queryRaw`
+          SELECT COUNT(DISTINCT p."question")::int AS "total"
+          FROM "PendingReview" p
+          WHERE p."status" = ${mappedStatus}
+            AND p."question" IS NOT NULL
+            AND LENGTH(TRIM(p."question")) > 0
+        `
+      ])
+    } else {
+      [groupedRows, totalRows] = await Promise.all([
+        prisma.$queryRaw`
+          SELECT
+            grouped."question" AS "question",
+            grouped."count"::int AS "count",
+            grouped."id" AS "id",
+            grouped."aiResponse" AS "aiResponse",
+            grouped."source" AS "source",
+            grouped."status" AS "status",
+            grouped."reviewNote" AS "reviewNote",
+            grouped."resolvedBy" AS "resolvedBy",
+            grouped."resolvedAt" AS "resolvedAt",
+            grouped."interactionId" AS "interactionId",
+            grouped."createdAt" AS "createdAt",
+            grouped."updatedAt" AS "updatedAt"
+          FROM (
+            SELECT
+              p.*,
+              COUNT(*) OVER (PARTITION BY p."question") AS "count",
+              ROW_NUMBER() OVER (PARTITION BY p."question" ORDER BY p."createdAt" DESC, p."id" DESC) AS "rn"
+            FROM "PendingReview" p
+            WHERE p."question" IS NOT NULL
+              AND LENGTH(TRIM(p."question")) > 0
+          ) grouped
+          WHERE grouped."rn" = 1
+          ORDER BY grouped."createdAt" DESC, grouped."id" DESC
+          OFFSET ${pagination.skip}
+          LIMIT ${pagination.pageSize}
+        `,
+        prisma.$queryRaw`
+          SELECT COUNT(DISTINCT p."question")::int AS "total"
+          FROM "PendingReview" p
+          WHERE p."question" IS NOT NULL
+            AND LENGTH(TRIM(p."question")) > 0
+        `
+      ])
     }
 
-    const groups = [...grouped.values()]
-      .sort((a, b) => new Date(b.latest.createdAt) - new Date(a.latest.createdAt))
-    const total = groups.length
-    const slicedGroups = groups.slice(pagination.skip, pagination.skip + pagination.pageSize)
+    const groups = groupedRows.map(row => ({
+      question: row.question,
+      count: Number(row.count) || 0,
+      latest: {
+        id: row.id,
+        question: row.question,
+        aiResponse: row.aiResponse,
+        source: row.source,
+        status: row.status,
+        reviewNote: row.reviewNote,
+        resolvedBy: row.resolvedBy,
+        resolvedAt: row.resolvedAt,
+        interactionId: row.interactionId,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt
+      }
+    }))
+    const total = Number(totalRows?.[0]?.total) || 0
 
     return {
-      groups: slicedGroups,
+      groups,
       page: pagination.page,
       pageSize: pagination.pageSize,
       total,
@@ -1176,7 +1310,15 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     return { item: updated }
   })
 
-  app.post('/api/admin/auth/login', async (request, reply) => {
+  app.post('/api/admin/auth/login', {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: '15 minutes',
+        keyGenerator: request => request.ip || 'unknown'
+      }
+    }
+  }, async (request, reply) => {
     const body = request.body || {}
     const username = String(body.username || '').trim()
     const password = String(body.password || '')
@@ -1186,8 +1328,13 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     const user = await prisma.adminUser.findFirst({
       where: { username, isDelete: false }
     })
-    if (!user || user.password !== password) {
+    if (!user || !verifyPassword(password, user.password)) {
       return reply.code(401).send({ ok: false, error: 'Invalid credentials' })
+    }
+    // Auto-rehash legacy plaintext passwords on successful login
+    if (!user.password.startsWith('scrypt:')) {
+      const rehashed = hashPassword(password)
+      await prisma.adminUser.update({ where: { id: user.id }, data: { password: rehashed } })
     }
     return { ok: true, username: user.username }
   })
@@ -1216,26 +1363,50 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     }
   })
 
-  app.post('/api/admin/admin-users', { preHandler: adminGuard }, async request => {
+  app.post('/api/admin/admin-users', { preHandler: adminGuard }, async (request, reply) => {
     const body = request.body || {}
     const changedBy = String(request.headers['x-admin-user'] || 'admin')
-    const item = await prisma.adminUser.create({ data: { username: body.username, password: body.password } })
+    const username = typeof body.username === 'string' ? body.username.trim() : ''
+    const password = typeof body.password === 'string' ? body.password : ''
+    if (!username || !password) {
+      return reply.code(400).send({ error: 'username and password required' })
+    }
+    const existing = await prisma.adminUser.findFirst({ where: { username, isDelete: false } })
+    if (existing) {
+      return reply.code(409).send({ error: 'username already exists' })
+    }
+    const item = await prisma.adminUser.create({ data: { username, password: hashPassword(password) } })
     await writeAudit({ action: 'CREATE_ADMIN_USER', entityType: 'AdminUser', entityId: item.id, newValue: { id: item.id, username: item.username }, changedBy, request })
     return { item }
   })
 
-  app.patch('/api/admin/admin-users/:id', { preHandler: adminGuard }, async request => {
+  app.patch('/api/admin/admin-users/:id', { preHandler: adminGuard }, async (request, reply) => {
     const id = toInt(request.params.id)
     const body = request.body || {}
     const changedBy = String(request.headers['x-admin-user'] || 'admin')
     const oldValue = await prisma.adminUser.findFirst({ where: { id, isDelete: false } })
     if (!oldValue) return { error: 'Not found' }
 
+    if (body.username !== undefined) {
+      const username = String(body.username).trim()
+      if (!username) {
+        return reply.code(400).send({ error: 'username cannot be empty' })
+      }
+      if (username !== oldValue.username) {
+        const conflict = await prisma.adminUser.findFirst({
+          where: { username, isDelete: false, NOT: { id } }
+        })
+        if (conflict) {
+          return reply.code(409).send({ error: 'username already exists' })
+        }
+      }
+    }
+
     const item = await prisma.adminUser.update({
       where: { id },
       data: {
-        ...(body.username !== undefined ? { username: body.username } : {}),
-        ...(body.password !== undefined ? { password: body.password } : {})
+        ...(body.username !== undefined ? { username: String(body.username).trim() } : {}),
+        ...(body.password !== undefined ? { password: hashPassword(String(body.password)) } : {})
       }
     })
     await writeAudit({ action: 'UPDATE_ADMIN_USER', entityType: 'AdminUser', entityId: item.id, oldValue: { id: oldValue.id, username: oldValue.username }, newValue: { id: item.id, username: item.username }, changedBy, request })
@@ -1312,43 +1483,50 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       })
     )
 
-    const rows = await prisma.interaction.findMany({
-      where: { createdAt: { gte: from, lte: to } },
-      select: { modelId: true, isThumbUp: true, responseTime: true, inputTokens: true, outputTokens: true, cost: true, id: true }
-    })
+    const [summaryRows, thumbUpRows, thumbDownRows, unknownRows] = await Promise.all([
+      prisma.interaction.groupBy({
+        by: ['modelId'],
+        where: { createdAt: { gte: from, lte: to } },
+        _count: { _all: true },
+        _sum: { responseTime: true, inputTokens: true, outputTokens: true, cost: true }
+      }),
+      prisma.interaction.groupBy({
+        by: ['modelId'],
+        where: { createdAt: { gte: from, lte: to }, isThumbUp: true },
+        _count: { _all: true }
+      }),
+      prisma.interaction.groupBy({
+        by: ['modelId'],
+        where: { createdAt: { gte: from, lte: to }, isThumbUp: false },
+        _count: { _all: true }
+      }),
+      prisma.$queryRaw`
+        SELECT i."modelId" AS "modelId", COUNT(*)::int AS "unknownCount"
+        FROM "PendingReview" p
+        JOIN "Interaction" i ON i."id" = p."interactionId"
+        WHERE p."source" = 'UNKNOWN_ANSWER'
+          AND p."createdAt" >= ${from}
+          AND p."createdAt" <= ${to}
+        GROUP BY i."modelId"
+      `
+    ])
 
-    const unknownRows = await prisma.pendingReview.findMany({
-      where: { source: 'UNKNOWN_ANSWER', createdAt: { gte: from, lte: to } },
-      select: { interaction: { select: { modelId: true } } }
-    })
-
-    const unknownByModel = new Map()
-    for (const row of unknownRows) {
-      const modelId = row.interaction?.modelId
-      if (!modelId) continue
-      unknownByModel.set(modelId, (unknownByModel.get(modelId) || 0) + 1)
-    }
+    const thumbUpByModel = new Map(thumbUpRows.map(row => [row.modelId, row._count._all || 0]))
+    const thumbDownByModel = new Map(thumbDownRows.map(row => [row.modelId, row._count._all || 0]))
+    const unknownByModel = new Map(unknownRows.map(row => [row.modelId, Number(row.unknownCount) || 0]))
 
     const map = new Map()
-    for (const row of rows) {
-      const curr = map.get(row.modelId) || {
+    for (const row of summaryRows) {
+      map.set(row.modelId, {
         modelId: row.modelId,
-        answers: 0,
-        thumbUp: 0,
-        thumbDown: 0,
-        latencySum: 0,
-        inputSum: 0,
-        outputSum: 0,
-        costSum: 0
-      }
-      curr.answers += 1
-      if (row.isThumbUp === true) curr.thumbUp += 1
-      if (row.isThumbUp === false) curr.thumbDown += 1
-      curr.latencySum += row.responseTime || 0
-      curr.inputSum += row.inputTokens || 0
-      curr.outputSum += row.outputTokens || 0
-      curr.costSum += row.cost || 0
-      map.set(row.modelId, curr)
+        answers: row._count._all || 0,
+        thumbUp: thumbUpByModel.get(row.modelId) || 0,
+        thumbDown: thumbDownByModel.get(row.modelId) || 0,
+        latencySum: row._sum.responseTime || 0,
+        inputSum: row._sum.inputTokens || 0,
+        outputSum: row._sum.outputTokens || 0,
+        costSum: row._sum.cost || 0
+      })
     }
 
     const items = [...map.values()].map(v => {
@@ -1393,22 +1571,25 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
 
   app.get('/api/admin/search-analytics', { preHandler: adminGuard }, async request => {
     const { from, to } = normalizeDateRange(request.query || {})
-    const rows = await prisma.interaction.findMany({
-      where: { createdAt: { gte: from, lte: to } },
-      select: { userQuestion: true, isThumbUp: true }
-    })
+    const groupedRows = await prisma.$queryRaw`
+      SELECT
+        TRIM("userQuestion") AS "question",
+        COUNT(*)::int AS "count",
+        COUNT(*) FILTER (WHERE "isThumbUp" = false)::int AS "down"
+      FROM "Interaction"
+      WHERE "createdAt" >= ${from}
+        AND "createdAt" <= ${to}
+        AND LENGTH(TRIM("userQuestion")) > 0
+      GROUP BY TRIM("userQuestion")
+      ORDER BY COUNT(*) DESC
+      LIMIT ${SEARCH_ANALYTICS_GROUP_LIMIT}
+    `
 
-    const topMap = new Map()
-    for (const row of rows) {
-      const q = (row.userQuestion || '').trim()
-      if (!q) continue
-      const curr = topMap.get(q) || { question: q, count: 0, down: 0 }
-      curr.count += 1
-      if (row.isThumbUp === false) curr.down += 1
-      topMap.set(q, curr)
-    }
-
-    const all = [...topMap.values()].sort((a, b) => b.count - a.count)
+    const all = groupedRows.map(row => ({
+      question: row.question,
+      count: Number(row.count) || 0,
+      down: Number(row.down) || 0
+    }))
     const topQuestions = all
     const repeatedQuestions = all.filter(x => x.count > 1)
     const lowSatisfactionTopics = all
