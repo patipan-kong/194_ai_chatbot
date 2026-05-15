@@ -1,5 +1,6 @@
 import AdminShell from '@/components/admin-shell'
 import ChatHistoryModal from '@/components/chat-history-modal'
+import InteractionTagEditor from '@/components/interaction-tag-editor'
 import { apiGet } from '@/lib/admin-api'
 
 export default async function InteractionDetailPage({ params }) {
@@ -65,6 +66,8 @@ export default async function InteractionDetailPage({ params }) {
             <p className='text-xs text-slate-500 mb-2'>AI Response</p>
             <p className='whitespace-pre-wrap'>{item.aiResponse}</p>
           </div>
+
+          <InteractionTagEditor interactionId={interactionId} initialTags={item.tags || []} />
 
           <div className='card'>
             <p className='text-xs text-slate-500 mb-2'>Prompt Template Used (Version {data.promptVersionUsed || '-'})</p>

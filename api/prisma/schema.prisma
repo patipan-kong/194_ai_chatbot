@@ -53,6 +53,7 @@ model Interaction {
   outputTokens  Int? // tokens used in completion
   cost          Float          @default(0)
   responseTime  Int? // ms from request to response
+  tags          String[]       @default([])
   createdAt     DateTime       @default(now())
   setting       SystemSetting  @relation(fields: [settingId], references: [id])
   pendingReview PendingReview?

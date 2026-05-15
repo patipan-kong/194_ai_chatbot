@@ -131,6 +131,13 @@ export default async function InteractionsPage({ searchParams }) {
               ? <span className='rounded px-1.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700'>Missing</span>
               : <span className='text-slate-400 text-xs'>–</span>
           },
+          {
+            key: 'tags',
+            header: 'Tags',
+            render: v => Array.isArray(v) && v.length > 0
+              ? <span className='flex flex-wrap gap-1'>{v.map(t => <span key={t} className='rounded-full bg-blue-100 text-blue-700 px-1.5 py-0.5 text-xs'>{t}</span>)}</span>
+              : <span className='text-slate-400 text-xs'>–</span>
+          },
           { key: 'modelId', header: 'Model' },
           { key: 'inputTokens', header: 'In' },
           { key: 'outputTokens', header: 'Out' },

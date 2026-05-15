@@ -385,6 +385,7 @@ await app.register(cors, () => (request, cb) => {
 })
 await app.register(rateLimit, {
   global: false,
+  keyGenerator: request => request.body?.userId || request.ip,
   addHeaders: {
     'x-ratelimit-limit': true,
     'x-ratelimit-remaining': true,

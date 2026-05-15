@@ -29,6 +29,7 @@ export default async function SearchReportPage({ searchParams }) {
   const unansweredQuestions = paginate(data.unansweredQuestions || [], 'unansweredPage')
   const repeatedQuestions = paginate(data.repeatedQuestions || [], 'repeatedPage')
   const lowSatisfactionTopics = paginate(data.lowSatisfactionTopics || [], 'lowSatPage')
+  const tagTrends = paginate(data.tagTrends || [], 'tagPage')
 
   return (
     <AdminShell title='Search Analytics'>
@@ -105,6 +106,26 @@ export default async function SearchReportPage({ searchParams }) {
             total={lowSatisfactionTopics.total}
             totalPages={lowSatisfactionTopics.totalPages}
             pageParam='lowSatPage'
+          />
+        </section>
+
+        <section>
+          <h3 className='font-semibold mb-2'>Tag Trends</h3>
+          <SimpleTable
+            columns={[
+              { key: 'tag', header: 'Tag', render: v => <span className='rounded-full bg-blue-100 text-blue-700 px-2.5 py-0.5 text-xs font-medium'>{v}</span> },
+              { key: 'count', header: 'Count' }
+            ]}
+            rows={tagTrends.rows}
+          />
+          <ListPagination
+            basePath='/reports/search'
+            searchParams={p}
+            page={tagTrends.page}
+            pageSize={pageSize}
+            total={tagTrends.total}
+            totalPages={tagTrends.totalPages}
+            pageParam='tagPage'
           />
         </section>
       </div>

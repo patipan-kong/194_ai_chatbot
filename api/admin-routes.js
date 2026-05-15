@@ -1039,14 +1039,15 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
         outputTokens: true,
         cost: true,
         responseTime: true,
+        tags: true,
         createdAt: true
       }
     })
 
-    const cols = ['id', 'userId', 'userQuestion', 'aiResponse', 'modelId', 'isThumbUp', 'inputTokens', 'outputTokens', 'cost', 'responseTime', 'createdAt']
+    const cols = ['id', 'userId', 'userQuestion', 'aiResponse', 'modelId', 'isThumbUp', 'inputTokens', 'outputTokens', 'cost', 'responseTime', 'tags', 'createdAt']
     const esc = v => {
       if (v === null || v === undefined) return ''
-      const s = String(v)
+      const s = Array.isArray(v) ? v.join(';') : String(v)
       return s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')
         ? '"' + s.replace(/"/g, '""') + '"'
         : s
@@ -1091,6 +1092,36 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       }
     })
     return { userId: anchor.userId, items }
+  })
+
+  app.patch('/api/admin/interactions/:id/tags', { preHandler: adminGuard }, async (request, reply) => {
+    const id = toInt(request.params.id)
+    const changedBy = String(request.headers['x-admin-user'] || 'admin')
+
+    const rawTags = request.body?.tags
+    if (!Array.isArray(rawTags)) {
+      return reply.code(400).send({ error: 'tags must be an array' })
+    }
+    const tags = [...new Set(
+      rawTags.map(t => String(t).trim().toLowerCase()).filter(t => t.length > 0 && t.length <= 50)
+    )].slice(0, 10)
+
+    const old = await prisma.interaction.findUnique({ where: { id }, select: { tags: true } })
+    if (!old) return reply.code(404).send({ error: 'Not found' })
+
+    const item = await prisma.interaction.update({ where: { id }, data: { tags } })
+
+    await writeAudit({
+      action: 'UPDATE_TAGS',
+      entityType: 'Interaction',
+      entityId: id,
+      oldValue: { tags: old.tags },
+      newValue: { tags },
+      changedBy,
+      request
+    })
+
+    return { item }
   })
 
   app.get('/api/admin/pending-reviews', { preHandler: adminGuard }, async request => {
@@ -1657,16 +1688,31 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       .filter(x => x.count >= 2)
       .sort((a, b) => b.downRate - a.downRate)
 
-    const unansweredRows = await prisma.pendingReview.findMany({
-      where: { source: 'UNKNOWN_ANSWER', createdAt: { gte: from, lte: to } },
-      select: { question: true }
-    })
+    const [unansweredRows, tagRows] = await Promise.all([
+      prisma.pendingReview.findMany({
+        where: { source: 'UNKNOWN_ANSWER', createdAt: { gte: from, lte: to } },
+        select: { question: true }
+      }),
+      prisma.$queryRaw`
+        SELECT unnest(tags) AS tag, COUNT(*)::int AS count
+        FROM "Interaction"
+        WHERE "createdAt" >= ${from}
+          AND "createdAt" <= ${to}
+          AND array_length(tags, 1) > 0
+        GROUP BY tag
+        ORDER BY count DESC
+        LIMIT 100
+      `
+    ])
+
+    const tagTrends = tagRows.map(r => ({ tag: r.tag, count: Number(r.count) || 0 }))
 
     return {
       topQuestions,
       unansweredQuestions: unansweredRows,
       repeatedQuestions,
-      lowSatisfactionTopics
+      lowSatisfactionTopics,
+      tagTrends
     }
   })
 
