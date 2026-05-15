@@ -901,7 +901,11 @@ app.get('/api/health', async () => {
   const configStatus = MODELS.length && DEFAULT_MODEL && defaultProviderReady ? 'ok'
     : anyProviderReady ? 'degraded'
     : 'error'
-  const status = dbStatus === 'ok' && configStatus === 'ok' ? 'ok' : 'degraded'
+  const status = dbStatus === 'ok' && configStatus === 'ok'
+    ? 'ok'
+    : dbStatus === 'error' || configStatus === 'error'
+      ? 'error'
+      : 'degraded'
 
   return {
     status,
@@ -913,6 +917,7 @@ app.get('/api/health', async () => {
         modelCount: MODELS.length,
         defaultModel: DEFAULT_MODEL,
         defaultProviderReady,
+        defaultProviderEnvKey: defaultModelConfig ? PROVIDERS[defaultModelConfig.provider]?.envKey : null,
         chat: CHAT_SETTINGS,
         alerts: ALERT_SETTINGS
       },

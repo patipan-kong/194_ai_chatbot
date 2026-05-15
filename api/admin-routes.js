@@ -1402,6 +1402,13 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
       }
     }
 
+    if (body.password !== undefined) {
+      const password = String(body.password)
+      if (!password) {
+        return reply.code(400).send({ error: 'password cannot be empty' })
+      }
+    }
+
     const item = await prisma.adminUser.update({
       where: { id },
       data: {
