@@ -1011,6 +1011,54 @@ export async function registerAdminRoutes(app, prisma, MODELS, refreshRuntimeTex
     return { updated: rows.length }
   })
 
+  app.get('/api/admin/interactions/export', { preHandler: adminGuard }, async (request, reply) => {
+    const query = request.query || {}
+    const { from, to } = normalizeDateRange(query)
+    const sortDir = String(query.sortDir || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc'
+
+    const where = {
+      createdAt: { gte: from, lte: to },
+      ...(query.modelId ? { modelId: query.modelId } : {}),
+      ...(query.question ? { userQuestion: { contains: query.question, mode: 'insensitive' } } : {}),
+      ...buildInteractionSourceWhere(query.source),
+      ...(query.isThumbUp === 'true' ? { isThumbUp: true } : {}),
+      ...(query.isThumbUp === 'false' ? { isThumbUp: false } : {})
+    }
+
+    const items = await prisma.interaction.findMany({
+      where,
+      orderBy: { createdAt: sortDir },
+      select: {
+        id: true,
+        userId: true,
+        userQuestion: true,
+        aiResponse: true,
+        modelId: true,
+        isThumbUp: true,
+        inputTokens: true,
+        outputTokens: true,
+        cost: true,
+        responseTime: true,
+        createdAt: true
+      }
+    })
+
+    const cols = ['id', 'userId', 'userQuestion', 'aiResponse', 'modelId', 'isThumbUp', 'inputTokens', 'outputTokens', 'cost', 'responseTime', 'createdAt']
+    const esc = v => {
+      if (v === null || v === undefined) return ''
+      const s = String(v)
+      return s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')
+        ? '"' + s.replace(/"/g, '""') + '"'
+        : s
+    }
+    const csv = [cols.join(','), ...items.map(row => cols.map(c => esc(row[c])).join(','))].join('\n')
+    const date = new Date().toISOString().slice(0, 10)
+
+    reply.header('Content-Type', 'text/csv; charset=utf-8')
+    reply.header('Content-Disposition', `attachment; filename="interactions-${date}.csv"`)
+    return reply.send(csv)
+  })
+
   app.get('/api/admin/interactions/:id', { preHandler: adminGuard }, async request => {
     const id = toInt(request.params.id)
     const item = await prisma.interaction.findUnique({
